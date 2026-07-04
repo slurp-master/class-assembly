@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import List
-from lib.grouper import Group
-from lib.models import Player
+from lib.models import Group, Player
 from lib.logging_setup import setup_logging
 
 logger = setup_logging(__name__)
@@ -24,6 +23,8 @@ def export_groups_to_csv(groups: List[Group], backup: List[Player], output_path:
             row = {
                 'group_id': group_idx,
                 'global_name': member.global_name,
+                'raid_leader': member.is_raid_leader,
+                'group_needs_rl': group.needs_raid_leader,
             }
             for role in ROLE_COLUMNS:
                 row[role] = role in member.available_roles
@@ -33,6 +34,8 @@ def export_groups_to_csv(groups: List[Group], backup: List[Player], output_path:
         row = {
             'group_id': 'backup',
             'global_name': member.global_name,
+            'raid_leader': member.is_raid_leader,
+            'group_needs_rl': False,
         }
         for role in ROLE_COLUMNS:
             row[role] = role in member.available_roles

@@ -8,3 +8,12 @@ dependencies = [
     "pandas>=3.0.3",
     "pandas-stubs~=3.0.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

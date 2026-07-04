@@ -1,6 +1,5 @@
 from typing import List, Optional, Tuple
-from lib.grouper import Group
-from lib.models import Assignment
+from lib.models import Group, Assignment
 from lib.logging_setup import setup_logging
 
 logger = setup_logging(__name__)
@@ -22,8 +21,9 @@ def swap_members_for_balance(groups: List[Group], max_iterations: int = 100) -> 
 
     Only composition-preserving swaps are considered: two players are exchanged and
     each takes over the other's assigned role slot, which is valid only when both can
-    play the other's role (see Assignment.can_swap_with). This keeps every group's fixed
-    role composition intact.
+    play the other's role (see Assignment.can_swap_with). Swaps that would strip a group
+    of its required raid leader are also rejected. This keeps every group's fixed role
+    composition and raid-leader requirement intact.
     """
     improved = 0
 
@@ -36,6 +36,10 @@ def swap_members_for_balance(groups: List[Group], max_iterations: int = 100) -> 
                 for a in group1.assignments:
                     for b in group2.assignments:
                         if not a.can_swap_with(b):
+                            continue
+                        if not group1.swap_keeps_raid_leader(a, b.player):
+                            continue
+                        if not group2.swap_keeps_raid_leader(b, a.player):
                             continue
 
                         group1.swap(a, group2, b)

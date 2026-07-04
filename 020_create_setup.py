@@ -18,7 +18,9 @@ def print_initial_stats(players):
 
     backup_count = sum(1 for p in players if p.is_backup)
     regular_count = len(players) - backup_count
+    rl_count = sum(1 for p in players if p.is_raid_leader)
     logger.info(f'Player summary: Total={len(players)}, Backup={backup_count}, Regular={regular_count}')
+    logger.info(f'Raid leaders available: {rl_count}')
 
     logger.info('Role availability:')
     for role in ROLES:
@@ -32,10 +34,10 @@ def remove_emojis(text):
 
 
 def _members_dataframe(members):
-    """Dataframe of players (one row each) with a ✓ per role they're available for."""
+    """Dataframe of players (one row each) with a ✓ per role and a raid-leader marker."""
     rows = []
     for member in members:
-        row = {'player': remove_emojis(member.global_name)}
+        row = {'player': remove_emojis(member.global_name), 'RL': '★' if member.is_raid_leader else ''}
         for role in ROLES:
             row[role] = '✓' if role in member.available_roles else ''
         rows.append(row)
@@ -51,7 +53,8 @@ def print_results(groups, backup):
     for group_idx, group in enumerate(groups, 1):
         members = [a.player for a in group.ordered_members()]
         df = _members_dataframe(members)
-        print(f'\nGroup {group_idx}')
+        rl_note = ' -- NEEDS RAID LEADER (phantom)' if group.needs_raid_leader else ''
+        print(f'\nGroup {group_idx}{rl_note}')
         print(df.to_string(index=False))
 
     if backup:
@@ -66,14 +69,14 @@ def print_results(groups, backup):
     logger.info(f'  Total: {total_in_groups + len(backup)}')
 
 
-def main(seed=None):
+def main(seed=None, phantom_rl=0):
     players = load_players('data/010_reactions/reactions.csv')
     print_initial_stats(players)
 
     if seed is not None:
         logger.info(f'Using seed: {seed}')
 
-    assembly = GroupAssembly(players, seed=seed)
+    assembly = GroupAssembly(players, seed=seed, phantom_rl=phantom_rl)
     groups, backup = assembly.assemble_groups()
 
     logger.info('Balancing groups by experience...')
@@ -89,5 +92,7 @@ def main(seed=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Create raid group setup')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
+    parser.add_argument('--phantom-rl', type=int, default=0,
+                        help='Number of groups allowed to form without a real raid leader')
     args = parser.parse_args()
-    main(seed=args.seed)
+    main(seed=args.seed, phantom_rl=args.phantom_rl)

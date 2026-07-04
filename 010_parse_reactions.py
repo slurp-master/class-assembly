@@ -8,6 +8,19 @@ def main():
     omega_dir = Path('data/omega-2026-07-01')
     role_files = sorted(omega_dir.glob('*.json'))
 
+    raid_leaders = [
+        'Sand King',
+        'Amberforge',
+        'Irisviel',
+        'Herm Frilaix',
+        'Pufi',
+        'Ebon',
+        'Tytan',
+        'wuCk',
+        'Moldy',
+        'Netherwind',
+    ]
+
     # Extract role names (filename without extension, without number prefix)
     roles = [f.stem.split('-', 1)[1] for f in role_files]
 
@@ -47,9 +60,19 @@ def main():
     df['username'] = df['username'].replace({'': None})
     df['global_name'] = df['global_name'].fillna(df.username)
 
+    # Raid leaders are provided out-of-band (not in the reaction JSON) by global_name.
+    # Mark them as a boolean column so the grouper can enforce >=1 RL per group.
+    df['raid_leader'] = df['global_name'].isin(raid_leaders)
+
+    matched = set(df.loc[df['raid_leader'], 'global_name'])
+    missing = [name for name in raid_leaders if name not in matched]
+    if missing:
+        print(f'WARNING: raid leaders not found among signups: {missing}')
+
     df.to_csv('./data/010_reactions/reactions.csv', index=False)
     print(f'Saved!')
     print(f'Total users: {len(df)}')
+    print(f'Raid leaders matched: {len(matched)} of {len(raid_leaders)}')
     print(f'Columns: {list(df.columns)}')
 
 

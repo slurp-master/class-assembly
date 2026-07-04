@@ -9,7 +9,10 @@ composition, so an organizer doesn't have to do it by hand.
 
 1. `010_parse_reactions.py` — parses the per-role Discord reaction JSON exports
    (`data/<event>/*.json`) into a single `data/010_reactions/reactions.csv`. Each row is
-   a player; boolean columns mark which roles they signed up for plus `backup`.
+   a player; boolean columns mark which roles they signed up for plus `backup` and
+   `raid_leader`. Raid leaders are supplied out-of-band (a hard-coded list of
+   `global_name`s in the script, *not* present in the reaction JSON) and matched by name;
+   the script warns if any named leader isn't found among signups.
 2. `020_create_setup.py` — loads players from `reactions.csv`, assembles groups
    (greedy constructor), balances them by experience (swap-based local search), and
    writes `data/020_setup/setup.csv` plus a human-readable console preview.
@@ -30,6 +33,20 @@ composition, so an organizer doesn't have to do it by hand.
   *when achievable*. To maximize the number of complete groups, a group may **relax**
   to fewer flavors (e.g. 2 melee + 2 caster) — but *only when stuck*, i.e. no strict
   candidate exists at fill time. Every relaxed (non-standard) group must emit a warning.
+- **Raid leader:** every group needs **at least one raid leader** to start. A raid leader
+  is an ordinary member who fills a normal composition role but also organizes and shot-
+  calls the group. It is a **hard** requirement *on top of* role composition — not a
+  composition slot, so it can't be modeled as just another role. The grouper handles it
+  RL-first: it seats one raid leader (into any composition role they can fill) before
+  ordinary members compete for slots, and it **reserves** the remaining raid leaders so
+  ordinary fills don't drain the pool below what later groups need. Raid leaders cap the
+  group count just like tanks and healers do.
+  - **Phantom raid leaders:** setups are made ~a day before the event, so a group may be
+    intentionally formed *without* a real raid leader, hoping one is found in time. This
+    is opt-in via `--phantom-rl N` (default 0): once real raid leaders are exhausted, up
+    to `N` further groups may form leaderless. Such groups are flagged as needing a raid
+    leader in both outputs and never have their (nonexistent) raid leader "protected" by
+    balancing swaps.
 - **Maximize the number of complete groups.** Players who don't fit go to the bench;
   players who opted into `backup` are the natural bench candidates.
 
@@ -52,13 +69,27 @@ Greedy constructor + swap-based local search. No need for a provably optimal sol
 with different seeds to get alternative setups is valuable — the initial solve is the
 time-consuming part, not evaluating a candidate.
 
+Because it's a single greedy pass, re-running with different `--seed` values can surface
+alternative (sometimes better-balanced) setups — the intended way to explore options.
+
+**Raid-leader seating is capability-aware.** A DPS-only raid leader is seated into a
+concrete DPS flavor (the internal `'dps'` slot placeholder is resolved), and within each
+group the *most constrained* available raid leader is seated first. This front-loads
+inflexible leaders (e.g. a caster-only RL) so they aren't stranded once their only viable
+slot is gone — without it, such a leader could be left over and cost the group entirely.
+
+Balancing swaps are constraint-preserving — they only exchange two players when each can
+play the other's tentative role *and* neither group loses its required raid leader.
+
 ## Output
 
 - `data/020_setup/setup.csv` — canonical, machine-readable; imported into other systems.
-  Columns: `group_id`, `global_name`, then a boolean per role (role availability, not an
-  assignment). Bench players get `group_id = backup`.
-- Console table — human-readable preview for the operator to sanity-check a run. Same
-  data, `✓` marks, emojis stripped from names for terminal legibility.
+  Columns: `group_id`, `global_name`, `raid_leader`, `group_needs_rl`, then a boolean per
+  role (role availability, not an assignment). Bench players get `group_id = backup`.
+- Console table — human-readable preview for the operator to sanity-check a run. One
+  table per group (its own header), a `★` in the `RL` column marks raid leaders, `✓`
+  marks role availability, emojis stripped from names for terminal legibility. Phantom
+  groups are headed with a "NEEDS RAID LEADER" note.
 
 Keep **both**; they serve different consumers. Neither shows an assigned role.
 
@@ -78,6 +109,26 @@ function that takes a single object and only touches its internals belongs on th
 as a method/property (e.g. `Group.experience`, `Assignment.can_swap_with`). Functions
 operating over a *collection* of objects (e.g. imbalance across all groups, the swap
 search) stay as free functions. This keeps logic discoverable and eases unit testing.
+
+
+## Tests
+
+Tests use **pytest** (a dev dependency) — plain `assert` statements get full value/diff
+output on failure. No `unittest`. Conventions:
+- **One file per object** under `tests/` (`test_player.py`, `test_group.py`, ...), with a
+  single plain test class named `Test<Object>` (`TestPlayer`, `TestGroup`) — pytest's
+  default collection convention. No base class is needed.
+- **Descriptive method names** that read as behavior, prefixed with `test_`:
+  `test_it_detects_what_roles_it_can_fill`, `test_it_correctly_adds_a_player`.
+- Call the object under test **`subject`** (e.g. `assert subject.is_full()`).
+- Use **plain `assert`** (`assert foo`, `assert a == b`, `assert a < b`) — not
+  `self.assertEqual` / `assertTrue` / `assertLess`. Pytest rewrites plain asserts to show
+  the compared values, so the helper methods add nothing but noise.
+- Don't lean on parametrization — prefer one clearly-named test per behavior so a failure
+  name tells you exactly what broke.
+
+Run with: `uv run pytest` (config in `pyproject.toml` sets `testpaths` and `pythonpath`,
+so no `PYTHONPATH=.` needed).
 
 
 ## Logging

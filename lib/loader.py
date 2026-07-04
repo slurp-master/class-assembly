@@ -17,12 +17,14 @@ def load_players(csv_path: str) -> List[Player]:
                 available_roles.add(role)
 
         is_backup = pd.notna(row.get('backup')) and row['backup']
+        is_raid_leader = pd.notna(row.get('raid_leader')) and row['raid_leader']
 
         player = Player(
             username=row['username'],
             global_name=row['global_name'],
             available_roles=frozenset(available_roles),
             is_backup=is_backup,
+            is_raid_leader=is_raid_leader,
         )
         players.append(player)
 
