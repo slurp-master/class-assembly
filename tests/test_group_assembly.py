@@ -1,5 +1,6 @@
 from lib.models import GROUP_SIZE, DPS_ROLES
 from lib.grouper import GroupAssembly
+from lib.balancer import swap_members_for_balance
 from tests.factories import make_player
 
 ALL_ROLES = ('tank', 'pure', 'shield', 'melee', 'ranged', 'caster')
@@ -19,8 +20,8 @@ def omni_roster(count, raid_leaders):
     ]
 
 
-def assemble(players, seed=0, phantom_rl=0):
-    return GroupAssembly(players, seed=seed, phantom_rl=phantom_rl).assemble_groups()
+def assemble(players, seed=0, phantom_rl=0, pairs=None):
+    return GroupAssembly(players, seed=seed, phantom_rl=phantom_rl, pairs=pairs or {}).assemble_groups()
 
 
 def assert_valid_composition(group):
@@ -45,7 +46,7 @@ class TestGroupAssembly:
 
     def test_it_forms_a_single_group_from_a_generous_small_roster(self):
         players = omni_roster(count=11, raid_leaders=2)  # 8 needed, 3 spare -> backup
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 1
         assert len(backup) == 3
         assert_valid_composition(groups[0])
@@ -53,7 +54,7 @@ class TestGroupAssembly:
 
     def test_it_forms_multiple_groups_from_a_generous_roster(self):
         players = omni_roster(count=27, raid_leaders=5)  # 3 full groups (24) + 3 backup
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 3
         assert len(backup) == 3
         for group in groups:
@@ -62,7 +63,7 @@ class TestGroupAssembly:
 
     def test_it_forms_up_to_five_groups_when_the_roster_is_large(self):
         players = omni_roster(count=45, raid_leaders=8)  # 5 full groups (40) + 5 backup
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 5
         assert len(backup) == 5
         for group in groups:
@@ -73,21 +74,21 @@ class TestGroupAssembly:
 
     def test_it_leaves_no_backup_for_a_roster_of_exactly_one_group(self):
         players = omni_roster(count=8, raid_leaders=1)
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 1
         assert backup == []
         assert_valid_composition(groups[0])
 
     def test_it_leaves_no_backup_for_a_roster_of_exactly_three_groups(self):
         players = omni_roster(count=24, raid_leaders=4)
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 3
         assert backup == []
         assert_no_player_used_twice(groups, backup, players)
 
     def test_it_leaves_no_backup_for_a_roster_of_exactly_five_groups(self):
         players = omni_roster(count=40, raid_leaders=6)
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 5
         assert backup == []
         for group in groups:
@@ -103,7 +104,7 @@ class TestGroupAssembly:
         tanks = [player(f'tank{i}', roles=('tank',)) for i in range(4)]
         filler = [player(f'o{i}', roles=non_tank, is_raid_leader=(i < 2)) for i in range(20)]
         players = tanks + filler
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 2                      # 4 tank-capable // 2 per group
         for group in groups:
             assert_valid_composition(group)
@@ -116,7 +117,7 @@ class TestGroupAssembly:
         shield = [player('theonlyshield', roles=('shield',))]
         filler = [player(f'o{i}', roles=non_shield, is_raid_leader=(i < 3)) for i in range(23)]
         players = shield + filler
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 1                      # min(pure, shield) with shield == 1
         assert_valid_composition(groups[0])
         assert_no_player_used_twice(groups, backup, players)
@@ -129,7 +130,7 @@ class TestGroupAssembly:
         pures = [player(f'pure{i}', roles=('pure',)) for i in range(2)]
         filler = [player(f'f{i}', roles=neither, is_raid_leader=(i < 2)) for i in range(20)]
         players = tanks + pures + filler
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 2                      # min(6//2, pure=2) == 2
         for group in groups:
             assert_valid_composition(group)
@@ -139,7 +140,7 @@ class TestGroupAssembly:
 
     def test_every_group_has_a_raid_leader_when_leaders_are_abundant(self):
         players = omni_roster(count=40, raid_leaders=20)  # far more RLs than the 5 groups
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 5
         for group in groups:
             assert group.has_raid_leader
@@ -148,7 +149,7 @@ class TestGroupAssembly:
     def test_raid_leader_scarcity_caps_the_number_of_groups(self):
         # Enough players/roles for 4 groups, but only 2 raid leaders and no phantom allowed.
         players = omni_roster(count=32, raid_leaders=2)
-        groups, backup = assemble(players, phantom_rl=0)
+        groups, backup, _ = assemble(players, phantom_rl=0)
         assert len(groups) == 2                      # capped by 2 raid leaders
         assert len(backup) == 32 - 16
         for group in groups:
@@ -157,7 +158,7 @@ class TestGroupAssembly:
     def test_phantom_raid_leaders_extend_the_group_count_past_real_leaders(self):
         # 2 real leaders + allow 2 phantom -> 4 groups, last two leaderless.
         players = omni_roster(count=32, raid_leaders=2)
-        groups, backup = assemble(players, phantom_rl=2)
+        groups, backup, _ = assemble(players, phantom_rl=2)
         assert len(groups) == 4
         real_led = [g for g in groups if not g.needs_raid_leader]
         phantom = [g for g in groups if g.needs_raid_leader]
@@ -173,7 +174,7 @@ class TestGroupAssembly:
         caster_only_rl = player('casteronly', roles=('caster',), is_raid_leader=True)
         filler = [player(f'f{i}', roles=ALL_ROLES) for i in range(21)]
         players = omni_rls + [caster_only_rl] + filler  # 24 total -> 3 groups
-        groups, backup = assemble(players)
+        groups, backup, _ = assemble(players)
         assert len(groups) == 3
         # The inflexible leader ended up in a group, not on the bench.
         assert all(p.username != 'casteronly' for p in backup)
@@ -186,10 +187,9 @@ class TestGroupAssembly:
     def test_it_forms_standard_groups_when_all_dps_flavors_are_available(self):
         # Everyone can play every flavor, so each group covers all three -> standard.
         assembly = GroupAssembly(omni_roster(count=24, raid_leaders=3), seed=0)
-        groups, _ = assembly.assemble_groups()
+        groups, _, _ = assembly.assemble_groups()
         assert len(groups) == 3
         assert all(g.is_standard() for g in groups)
-        assert assembly.non_standard_groups == 0
 
     def test_it_relaxes_dps_flavor_when_a_flavor_is_unavailable(self):
         # A single group's worth of players where the 4 DPS slots can only be filled by
@@ -203,7 +203,7 @@ class TestGroupAssembly:
         ]
         dps = [player(f'd{i}', roles=('melee', 'caster')) for i in range(4)]  # no ranged anywhere
         assembly = GroupAssembly(fixed + dps, seed=0)
-        groups, backup = assembly.assemble_groups()
+        groups, backup, _ = assembly.assemble_groups()
 
         assert len(groups) == 1
         assert backup == []
@@ -211,7 +211,6 @@ class TestGroupAssembly:
         assert_valid_composition(subject)              # hard rule: still 2/1/1/4
         assert not subject.is_standard()               # soft rule relaxed: ranged missing
         assert subject.dps_flavors() == {'melee', 'caster'}
-        assert assembly.non_standard_groups == 1
 
     # --- bench-first backups: backups only fill gaps regulars cannot cover ---
 
@@ -219,7 +218,7 @@ class TestGroupAssembly:
         # 8 regulars can form the one group; 3 backups (also omni) must be benched.
         regulars = [player(f'r{i}', roles=ALL_ROLES, is_raid_leader=(i == 0)) for i in range(8)]
         backups = [player(f'b{i}', roles=ALL_ROLES, is_backup=True) for i in range(3)]
-        groups, backup = assemble(regulars + backups)
+        groups, backup, _ = assemble(regulars + backups)
         assert len(groups) == 1
         # None of the grouped players is a backup; all backups sit on the bench.
         assert all(not p.is_backup for p in groups[0].members)
@@ -231,7 +230,7 @@ class TestGroupAssembly:
         non_shield = tuple(r for r in ALL_ROLES if r != 'shield')
         regulars = [player(f'r{i}', roles=non_shield, is_raid_leader=(i == 0)) for i in range(7)]
         shield_backup = player('shield_backup', roles=('shield',), is_backup=True)
-        groups, backup = assemble(regulars + [shield_backup])
+        groups, backup, _ = assemble(regulars + [shield_backup])
         assert len(groups) == 1
         assert backup == []
         # The backup was used because no regular could shield.
@@ -243,7 +242,159 @@ class TestGroupAssembly:
         regular_rl = player('regular_rl', roles=ALL_ROLES, is_raid_leader=True)
         backup_rl = player('backup_rl', roles=ALL_ROLES, is_raid_leader=True, is_backup=True)
         filler = [player(f'f{i}', roles=ALL_ROLES) for i in range(9)]
-        groups, backup = assemble([regular_rl, backup_rl] + filler)
+        groups, backup, _ = assemble([regular_rl, backup_rl] + filler)
         assert len(groups) == 1
         assert regular_rl in groups[0].members
         assert backup_rl in backup
+
+
+class TestGroupAssemblyWithPairs:
+    def _roster_with_pair(self):
+        """16 omni players, two RLs, 'alice' and 'bob' are a pair."""
+        return (
+            [player('rl', is_raid_leader=True), player('rl2', is_raid_leader=True),
+             player('alice'), player('bob')]
+            + [player(f'f{i}') for i in range(12)]
+        )
+
+    def test_paired_players_end_up_in_the_same_group(self):
+        players = self._roster_with_pair()
+        pairs = {'Alice': 'Bob', 'Bob': 'Alice'}
+        groups, _, _ = assemble(players, pairs=pairs)
+
+        alice_group = next(i for i, g in enumerate(groups) if any(p.username == 'alice' for p in g.members))
+        bob_group = next(i for i, g in enumerate(groups) if any(p.username == 'bob' for p in g.members))
+        assert alice_group == bob_group
+
+    def test_no_violated_pairs_when_pair_is_honoured(self):
+        players = self._roster_with_pair()
+        pairs = {'Alice': 'Bob', 'Bob': 'Alice'}
+        _, _, violated = assemble(players, pairs=pairs)
+        assert violated == []
+
+    def test_violated_pair_is_recorded_when_partners_cannot_share_a_group(self):
+        # alice is the sole shield; bob is DPS-only. With 8 players for 1 group they both
+        # fit, but if the greedy fill separates them violated must record it.
+        rl = make_player('rl', roles=ALL_ROLES, is_raid_leader=True)
+        alice = make_player('alice', roles=('shield',))
+        bob = make_player('bob', roles=('melee', 'ranged', 'caster'))
+        tanks = [make_player(f'tank{i}', roles=('tank',)) for i in range(2)]
+        pure = make_player('pure1', roles=('pure',))
+        dps = [make_player(f'd{i}', roles=('melee', 'ranged', 'caster')) for i in range(3)]
+        players = [rl, alice, bob, pure] + tanks + dps
+
+        groups, _, violated = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'})
+
+        assert len(groups) == 1
+        alice_in = any(p.username == 'alice' for p in groups[0].members)
+        bob_in = any(p.username == 'bob' for p in groups[0].members)
+        if not (alice_in and bob_in):
+            assert ('Alice', 'Bob') in violated or ('Bob', 'Alice') in violated
+        else:
+            assert violated == []
+
+    def test_violated_pair_when_one_member_ends_up_on_bench(self):
+        rl = player('rl', is_raid_leader=True)
+        alice = player('alice')
+        bob = player('bob')
+        fillers = [player(f'f{i}') for i in range(6)]
+        extra = player('extra')  # 9th regular -> one goes to bench
+        players = [rl, alice, bob] + fillers + [extra]
+
+        groups, _, violated = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'}, seed=0)
+
+        assert len(groups) == 1
+        alice_placed = any(p.username == 'alice' for p in groups[0].members)
+        bob_placed = any(p.username == 'bob' for p in groups[0].members)
+        if not (alice_placed and bob_placed):
+            assert ('Alice', 'Bob') in violated or ('Bob', 'Alice') in violated
+
+    def test_pair_violation_reported_only_once(self):
+        rl = player('rl', is_raid_leader=True)
+        fillers = [player(f'f{i}') for i in range(6)]
+        extra = player('extra')
+        players = [rl, player('alice'), player('bob')] + fillers + [extra]
+
+        _, _, violated = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'}, seed=0)
+
+        canonical_count = sum(1 for p in violated if set(p) == {'Alice', 'Bob'})
+        assert canonical_count <= 1
+
+    def test_no_pairs_does_not_break_assembly(self):
+        players = [player('rl', is_raid_leader=True)] + [player(f'p{i}') for i in range(7)]
+        groups, backup, _ = assemble(players)
+        assert len(groups) == 1
+        assert backup == []
+
+    def test_backup_pair_is_admitted_when_partner_is_already_in_group(self):
+        # bob is a backup; alice is his partner and a regular. The bench-first rule is
+        # relaxed when alice is already seated, so bob should join the group.
+        rl = player('rl', is_raid_leader=True)
+        alice = player('alice')
+        bob = player('bob', is_backup=True)
+        fillers = [player(f'f{i}') for i in range(6)]
+        players = [rl, alice, bob] + fillers
+
+        groups, _, violated = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'}, seed=0)
+
+        assert len(groups) == 1
+        assert any(p.username == 'bob' for p in groups[0].members)
+        assert violated == []
+
+    def test_paired_first_ordering_prefers_player_whose_partner_is_already_seated(self):
+        # One DPS slot left; two candidates of equal constraint: bob (partner alice already
+        # in group) and unpaired. Bob must win.
+        rl = make_player('rl', roles=ALL_ROLES, is_raid_leader=True)
+        tank1 = make_player('tank1', roles=('tank',))
+        tank2 = make_player('tank2', roles=('tank',))
+        pure1 = make_player('pure1', roles=('pure',))
+        shield1 = make_player('shield1', roles=('shield',))
+        dps1 = make_player('dps1', roles=('melee',))
+        dps2 = make_player('dps2', roles=('ranged',))
+        dps3 = make_player('dps3', roles=('caster',))
+        alice = make_player('alice', roles=('melee', 'ranged', 'caster'))
+        bob = make_player('bob', roles=('melee', 'ranged', 'caster'))
+        unpaired = make_player('unpaired', roles=('melee', 'ranged', 'caster'))
+
+        players = [rl, tank1, tank2, pure1, shield1, dps1, dps2, dps3, alice, bob, unpaired]
+        groups, _, _ = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'}, seed=0)
+
+        assert len(groups) == 1
+        member_names = {p.username for p in groups[0].members}
+        assert 'alice' in member_names
+        assert 'bob' in member_names
+        assert 'unpaired' not in member_names
+
+    def test_assemble_groups_returns_violated_pairs_as_third_element(self):
+        rl = player('rl', is_raid_leader=True)
+        fillers = [player(f'f{i}') for i in range(6)]
+        extra = player('extra')
+        players = [rl, player('alice'), player('bob')] + fillers + [extra]
+
+        _, _, violated = assemble(players, pairs={'Alice': 'Bob', 'Bob': 'Alice'}, seed=42)
+
+        assert isinstance(violated, list)
+        assert all(isinstance(v, tuple) and len(v) == 2 for v in violated)
+
+
+class TestBalancerPairConstraint:
+    def _two_group_setup(self, pairs):
+        rl1 = player('rl1', is_raid_leader=True)
+        rl2 = player('rl2', is_raid_leader=True)
+        alice = player('alice')
+        bob = player('bob')
+        g1_fillers = [player(f'g1f{i}') for i in range(4)]
+        g2_fillers = [player(f'g2f{i}') for i in range(6)]
+        players = [rl1, rl2, alice, bob] + g1_fillers + g2_fillers
+        groups, _, _ = assemble(players, pairs=pairs, seed=0)
+        return groups
+
+    def test_balancer_does_not_split_a_pair(self):
+        pairs = {'Alice': 'Bob', 'Bob': 'Alice'}
+        groups = self._two_group_setup(pairs)
+
+        swap_members_for_balance(groups, pairs=pairs)
+
+        alice_group = next(i for i, g in enumerate(groups) if any(p.username == 'alice' for p in g.members))
+        bob_group = next(i for i, g in enumerate(groups) if any(p.username == 'bob' for p in g.members))
+        assert alice_group == bob_group

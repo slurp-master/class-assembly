@@ -1,5 +1,4 @@
 import pandas as pd
-from typing import List
 from lib.models import Player
 
 # The actual party roles. 'check' (attendance confirmation), 'backup', and 'raid_leader'
@@ -7,7 +6,7 @@ from lib.models import Player
 ROLE_COLUMNS = ['tank', 'pure', 'shield', 'caster', 'melee', 'ranged']
 
 
-def load_players(csv_path: str) -> List[Player]:
+def load_players(csv_path: str) -> list[Player]:
     """Load players from reactions.csv"""
     df = pd.read_csv(csv_path)
 

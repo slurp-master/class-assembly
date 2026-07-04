@@ -1,10 +1,12 @@
 import argparse
 import pandas as pd
 import unicodedata
+from lib.models import Player, Group
 from lib.loader import load_players
 from lib.grouper import GroupAssembly
 from lib.exporter import export_groups_to_csv
 from lib.balancer import swap_members_for_balance, log_group_balance
+from lib.pairs import load_pairs, build_pair_lookup
 from lib.logging_setup import setup_logging
 
 logger = setup_logging(__name__)
@@ -12,8 +14,7 @@ logger = setup_logging(__name__)
 ROLES = ['tank', 'pure', 'shield', 'melee', 'caster', 'ranged']
 
 
-def print_initial_stats(players):
-    """Print initial player statistics"""
+def print_initial_stats(players: list[Player]) -> None:
     logger.info(f'Loaded {len(players)} players')
 
     backup_count = sum(1 for p in players if p.is_backup)
@@ -28,13 +29,11 @@ def print_initial_stats(players):
         logger.info(f'  {role}: {count}')
 
 
-def remove_emojis(text):
-    """Remove emoji from text"""
+def remove_emojis(text: str) -> str:
     return ''.join(c for c in text if unicodedata.category(c)[0] != 'S')
 
 
-def _members_dataframe(members):
-    """Dataframe of players (one row each) with a ✓ per role and a raid-leader marker."""
+def _members_dataframe(members: list[Player]) -> pd.DataFrame:
     rows = []
     for member in members:
         row = {'player': remove_emojis(member.global_name), 'RL': '★' if member.is_raid_leader else ''}
@@ -44,8 +43,7 @@ def _members_dataframe(members):
     return pd.DataFrame(rows)
 
 
-def print_results(groups, backup):
-    """Print each group as its own table, then the backup, then a summary."""
+def print_results(groups: list[Group], backup: list[Player], violated_pairs: int, active_pairs: int) -> None:
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', None)
@@ -67,26 +65,43 @@ def print_results(groups, backup):
     logger.info(f'  Players in groups: {total_in_groups}')
     logger.info(f'  Backup: {len(backup)}')
     logger.info(f'  Total: {total_in_groups + len(backup)}')
+    logger.info(f'  Pairs: {active_pairs} active, {violated_pairs} violated')
 
 
-def main(seed=None, phantom_rl=0):
+def main(seed: int | None = None, phantom_rl: int = 0) -> None:
     players = load_players('data/010_reactions/reactions.csv')
     print_initial_stats(players)
+
+    raw_pairs = load_pairs()
+    pairs = build_pair_lookup(raw_pairs, players)
+    logger.info(f'Active pairs: {len(pairs) // 2}')
 
     if seed is not None:
         logger.info(f'Using seed: {seed}')
 
-    assembly = GroupAssembly(players, seed=seed, phantom_rl=phantom_rl)
-    groups, backup = assembly.assemble_groups()
+    assembly = GroupAssembly(players, seed=seed, phantom_rl=phantom_rl, pairs=pairs)
+    groups, backup, violated_pairs = assembly.assemble_groups()
+
+    if violated_pairs:
+        logger.warning(f'Violated pairs ({len(violated_pairs)}):')
+        for name_1, name_2 in violated_pairs:
+            logger.warning(f'  {name_1} <-> {name_2}')
+    else:
+        logger.info('All active pairs were honoured')
 
     logger.info('Balancing groups by experience...')
-    swaps = swap_members_for_balance(groups)
+    swaps = swap_members_for_balance(groups, pairs=pairs)
     logger.info(f'Completed {swaps} swaps')
 
     export_groups_to_csv(groups, backup, 'data/020_setup/setup.csv')
 
     log_group_balance(groups)
-    print_results(groups, backup)
+    print_results(groups, backup, violated_pairs=len(violated_pairs), active_pairs=len(pairs) // 2)
+
+    forced_bench = [p for p in backup if not p.is_backup]
+    if forced_bench:
+        names = ', '.join(p.global_name for p in forced_bench)
+        logger.warning(f'Forced on bench ({len(forced_bench)}): {names}')
 
 
 if __name__ == '__main__':

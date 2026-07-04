@@ -107,11 +107,83 @@ play the other's tentative role *and* neither group loses its required raid lead
 
 Keep **both**; they serve different consumers. Neither shows an assigned role.
 
-## Scope
+## Pairs
 
-In scope: role composition + experience balancing. **Deferred** (mentioned but not yet
-built): "pairs" (people who want to be grouped together) and any signup/user-experience
-work.
+Players who want to end up in the same group can be registered as a **pair**. Pairs are
+stored in `data/000_pairs/pairs.csv` (columns: `name_1`, `name_2`, both `global_name`
+values). The file is mandatory — an exception is raised if it is absent.
+
+### Semantics
+
+- A pair is **community-wide and persistent**: it grows independently of event signups.
+  Many pairs will have one or both members absent from any given event.
+- A pair is **active for an event** only when **both** members signed up. If only one
+  signed up, that player competes as unpaired (no warning to the operator — this is
+  expected). If neither signed up, the pair is silently skipped.
+- **RL × RL pairs are forbidden** and raise a `ValueError` at load time. One RL + one
+  non-RL is allowed.
+
+### Placement rule
+
+Pairs are a **best-effort preference**, not an absolute guarantee. There is no forced
+pre-seating; instead, candidate selection in `_pick` and `_candidates_for` is biased
+toward keeping pairs together via a three-level priority:
+
+1. **Partner already in this group** — if a candidate's pair partner is already seated in
+   the group being filled, that candidate is preferred above all others for the current
+   slot.
+2. **Partner still available** — if a candidate's pair partner is still in the pool,
+   prefer them next. This front-loads paired players so their partners have more
+   opportunities to follow into the same group.
+3. **Most constrained** (fewest available roles) — the normal constrained-first tiebreak.
+4. **Random tiebreak** among candidates that share the same top three values (seeded for
+   reproducibility).
+
+Additionally, the bench-first rule is relaxed for backups: if a backup's pair partner is
+already seated in the group being filled, that backup is admitted as a candidate even when
+non-backup candidates also exist (`_candidates_for`). This prevents the bench-first filter
+from silently stranding backup pairs.
+
+This approach never blocks group formation — no slot is ever reserved or held for a
+partner, so a group can always be completed regardless of pair state.
+
+### Violated pairs
+
+After all groups are assembled, `_detect_violated_pairs` scans every active pair and
+records any where the two members ended up in different groups or one/both on the bench.
+Each canonical pair appears **at most once** in `assembly.violated_pairs`. The caller
+(`020_create_setup.py`) logs all violated pairs as warnings at the end of the run.
+
+### Balancer constraint
+
+`swap_members_for_balance` accepts an optional `pairs` dict. Any swap that would move
+one half of a pair to a different group while the other half stays is rejected
+(`_swap_splits_pair`). Pair integrity takes priority over experience balance.
+
+**Known limitation — zero shared roles:** If two paired players share no roles at all
+(e.g. one is pure/shield-only, the other is caster-only), they fill entirely different
+composition slots and preseat can never trigger for them from each other. They will always
+violate. A pre-group-seeding step that picks pairs first and builds the group around them
+would fix this, but requires a larger architectural change.
+
+**Deferred:** swapping two paired players together for two players from another group
+(or another pair) would allow balance improvement without splitting pairs — not yet
+implemented.
+
+## Bench fairness
+
+The constrained-first ordering has a known fairness cost: the most flexible regular
+player(s) — those with the most available roles — absorb involuntary bench spots
+deterministically. With the current event data it is always the same person (Eclipser,
+6 roles). Single-role players and raid leaders never bench by design.
+
+`020_create_setup.py` already warns about this at the end of each run
+(`Forced on bench (N): ...`), so the operator can intervene manually (e.g. swap the
+repeatedly-benched player in by hand, or try different seeds).
+
+A proper algorithmic fix would require tracking bench history across past events and
+using it as a tiebreaker in `_pick` — deliberately not implemented; handle outside the
+tool for now.
 
 
 ## Code style

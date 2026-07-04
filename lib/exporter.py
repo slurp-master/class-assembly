@@ -1,5 +1,4 @@
 import pandas as pd
-from typing import List
 from lib.models import Group, Player
 from lib.logging_setup import setup_logging
 
@@ -8,7 +7,7 @@ logger = setup_logging(__name__)
 ROLE_COLUMNS = ['tank', 'pure', 'shield', 'melee', 'caster', 'ranged']
 
 
-def export_groups_to_csv(groups: List[Group], backup: List[Player], output_path: str):
+def export_groups_to_csv(groups: list[Group], backup: list[Player], output_path: str):
     """Export group assignments to CSV using a pandas dataframe.
 
     Emits role-availability flags so the setup can be imported into other systems.

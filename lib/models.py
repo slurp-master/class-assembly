@@ -1,6 +1,5 @@
 from collections import Counter
 from dataclasses import dataclass
-from typing import List, Set
 
 GROUP_SIZE = 8
 # Fixed non-DPS composition. The remaining 4 slots are DPS (see DPS_ROLES).
@@ -61,13 +60,13 @@ class Assignment:
 
 class Group:
     def __init__(self, needs_raid_leader: bool = False):
-        self.assignments: List[Assignment] = []
+        self.assignments: list[Assignment] = []
         # Phantom groups are intentionally formed without a real raid leader, in the
         # hope one is found before the raid starts (setups are made ~a day ahead).
         self.needs_raid_leader = needs_raid_leader
 
     @property
-    def members(self) -> List[Player]:
+    def members(self) -> list[Player]:
         return [a.player for a in self.assignments]
 
     @property
@@ -132,7 +131,7 @@ class Group:
         valid -- a count of eight with the wrong roles is not a full group."""
         return len(self.assignments) == GROUP_SIZE and self.has_valid_composition()
 
-    def dps_flavors(self) -> Set[str]:
+    def dps_flavors(self) -> set[str]:
         """DPS flavors currently present among assigned roles."""
         return {a.role for a in self.assignments if a.role in DPS_ROLES}
 
@@ -140,7 +139,7 @@ class Group:
         """True if all three DPS flavors are represented (>=1 each)."""
         return set(DPS_ROLES).issubset(self.dps_flavors())
 
-    def ordered_members(self) -> List[Assignment]:
+    def ordered_members(self) -> list[Assignment]:
         """Assignments ordered for readable output: by which roles a player is available
         for (tank, then healers, then DPS), then by name. Uses role *availability*, not
         the tentative assigned role, since the assignment is not surfaced anywhere."""
