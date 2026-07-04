@@ -1,58 +1,76 @@
 import random
-from typing import List, Dict, Set
-from lib.models import Player
+from typing import List, Dict, Set, Optional
+from lib.models import Player, Assignment
 from lib.logging_setup import setup_logging
 
 logger = setup_logging(__name__)
 
 GROUP_SIZE = 8
-REQUIRED_ROLES = ['tank', 'tank', 'pure', 'shield', 'melee', 'ranged', 'caster', 'flex_dps']
-DPS_ROLES = {'melee', 'ranged', 'caster'}
+# Fixed non-DPS composition. The remaining 4 slots are DPS (see DPS_ROLES).
+FIXED_ROLES = ['tank', 'tank', 'pure', 'shield']
+DPS_ROLES = ['melee', 'ranged', 'caster']
+DPS_SLOTS = 4
 
 
 class Group:
     def __init__(self):
-        self.members: List[Player] = []
-        self.role_slots: List[str] = list(REQUIRED_ROLES)
+        self.assignments: List[Assignment] = []
 
-    def add_member(self, player: Player, role: str) -> bool:
-        """Try to add player to group for given role. Returns True if successful."""
-        if role not in self.role_slots:
-            return False
-        self.members.append(player)
-        self.role_slots.remove(role)
-        return True
+    @property
+    def members(self) -> List[Player]:
+        return [a.player for a in self.assignments]
+
+    @property
+    def experience(self) -> int:
+        """Total experience of the group (sum of member experiences)."""
+        return sum(a.experience for a in self.assignments)
+
+    def add(self, player: Player, role: str):
+        self.assignments.append(Assignment(player=player, role=role))
+
+    def swap(self, mine: Assignment, other: 'Group', theirs: Assignment):
+        """Swap two players between this group and ``other``, each taking over the
+        other's role slot. Caller is responsible for checking ``mine.can_swap_with``."""
+        self.assignments.remove(mine)
+        other.assignments.remove(theirs)
+        self.assignments.append(Assignment(player=theirs.player, role=mine.role))
+        other.assignments.append(Assignment(player=mine.player, role=theirs.role))
 
     def is_full(self) -> bool:
-        return len(self.role_slots) == 0
+        return len(self.assignments) == GROUP_SIZE
 
-    def get_needed_roles(self) -> List[str]:
-        return self.role_slots
+    def dps_flavors(self) -> Set[str]:
+        """DPS flavors currently present among assigned roles."""
+        return {a.role for a in self.assignments if a.role in DPS_ROLES}
 
-    def ordered_members(self) -> List[Player]:
-        sorted_by_name = sorted(self.members, key=lambda p: p.username)
-        role_order = ['tank', 'pure', 'shield', 'caster', 'melee', 'ranged']
-        role_order = list(reversed(role_order))
-        sorted_by_role = sorted(
-            sorted_by_name,
-            key=lambda p: sum([p.can(r) * (10 ** i) for i, r in enumerate(role_order)]),
-            reverse=True,
-        )
+    def is_standard(self) -> bool:
+        """True if all three DPS flavors are represented (>=1 each)."""
+        return set(DPS_ROLES).issubset(self.dps_flavors())
 
-        return sorted_by_role
+    def ordered_members(self) -> List[Assignment]:
+        """Assignments ordered for readable output: by which roles a player is available
+        for (tank, then healers, then DPS), then by name. Uses role *availability*, not
+        the tentative assigned role, since the assignment is not surfaced anywhere."""
+        priority = ['tank', 'pure', 'shield', 'melee', 'ranged', 'caster']
+
+        def key(a: Assignment):
+            p = a.player
+            # Higher weight for higher-priority roles the player can fill.
+            avail_score = sum(p.can(role) * (10 ** (len(priority) - i)) for i, role in enumerate(priority))
+            return (-avail_score, p.username)
+
+        return sorted(self.assignments, key=key)
 
 
 class GroupAssembly:
     def __init__(self, players: List[Player], seed: int = None):
-        if seed is not None:
-            random.seed(seed)
+        self.rng = random.Random(seed)
         self.players = players
-        self.available = list(players)
+        self.available: List[Player] = list(players)
         self.groups: List[Group] = []
         self.backup: List[Player] = []
         self.max_groups = self.calculate_max_groups()
-        self.dps_role_quota: Dict[str, int] = {}
-        self._calculate_dps_quota()
+        self.non_standard_groups = 0
 
     def calculate_max_groups(self) -> int:
         """Calculate max groups based on tank/healer bottleneck and total players"""
@@ -67,48 +85,55 @@ class GroupAssembly:
 
         return min(max_by_total, max_by_tanks, max_by_healers)
 
-    def _calculate_dps_quota(self):
-        """Pre-calculate how many of each DPS type to use per group"""
-        dps_counts = {role: sum(1 for p in self.players if role in p.available_roles) for role in DPS_ROLES}
+    def _pick(self, candidates: List[Player]) -> Optional[Player]:
+        """Pick the most constrained candidate (fewest roles), breaking near-ties randomly.
 
-        for role in DPS_ROLES:
-            quota = max(0, dps_counts[role] // self.max_groups)
-            self.dps_role_quota[role] = quota
-            if quota > 0:
-                logger.info(f'DPS quota for {role}: {quota} per group')
+        Sorting hardest-to-place first keeps flexible players available for later slots.
+        Among the most-constrained candidates we sample randomly so different seeds
+        yield different-but-valid setups.
+        """
+        if not candidates:
+            return None
+        candidates = sorted(candidates, key=lambda p: (p.num_roles, p.username))
+        min_num_roles = candidates[0].num_roles
+        top = [c for c in candidates if c.num_roles == min_num_roles]
+        return self.rng.choice(top)
 
-        self.dps_roles_used: Dict[str, int] = {role: 0 for role in DPS_ROLES}
+    def _candidates_for(self, role: str, excluded: Set[Player]) -> List[Player]:
+        return [p for p in self.available if p not in excluded and p.can(role)]
 
-    def _get_candidates(
-        self, needed_role: str, excluded: Set[Player], group_dps_usage: Dict[str, int]
-    ) -> List[Player]:
-        """Get candidates for a role, sorted by constrainedness then username"""
-        candidates = []
-        for p in self.available:
-            if p in excluded:
-                continue
+    def _fill_role(self, group: Group, role: str, excluded: Set[Player]) -> bool:
+        """Try to fill one slot of the given role. Returns True on success."""
+        chosen = self._pick(self._candidates_for(role, excluded))
+        if chosen is None:
+            return False
+        group.add(chosen, role)
+        excluded.add(chosen)
+        self.available.remove(chosen)
+        return True
 
-            if needed_role == 'flex_dps':
-                if any(role in p.available_roles for role in DPS_ROLES):
-                    candidates.append(p)
-            elif needed_role in DPS_ROLES:
-                if needed_role in p.available_roles:
-                    if group_dps_usage.get(needed_role, 0) < self.dps_role_quota.get(
-                        needed_role, 0
-                    ):
-                        candidates.append(p)
-            elif needed_role in p.available_roles:
-                candidates.append(p)
-
-        candidates.sort(key=lambda p: (p.num_roles, p.username))
-        if candidates and len(candidates) > 1:
-            min_num_roles = candidates[0].num_roles
-            top_candidates = [c for c in candidates if c.num_roles == min_num_roles]
-            if len(top_candidates) > 1:
-                return random.sample(top_candidates, min(3, len(top_candidates))) + candidates[len(
-                    top_candidates
-                ):]
-        return candidates
+    def _fill_dps(self, group: Group, excluded: Set[Player]) -> bool:
+        """Fill the 4 DPS slots. Cover all three flavors when possible (hard rule when
+        achievable), relaxing to fewer flavors only when no strict candidate exists.
+        Returns True if all 4 slots were filled."""
+        for _ in range(DPS_SLOTS):
+            missing = [r for r in DPS_ROLES if r not in group.dps_flavors()]
+            # Prefer flavors still missing so we cover all three; only if none of the
+            # missing flavors has a candidate do we relax to any available flavor.
+            filled = False
+            for role in missing:
+                if self._fill_role(group, role, excluded):
+                    filled = True
+                    break
+            if not filled:
+                # Relax: take any DPS flavor still available.
+                for role in DPS_ROLES:
+                    if self._fill_role(group, role, excluded):
+                        filled = True
+                        break
+            if not filled:
+                return False
+        return True
 
     def assemble_groups(self) -> tuple:
         """Greedily assemble groups. Returns (groups, backup)"""
@@ -116,47 +141,38 @@ class GroupAssembly:
 
         for group_idx in range(self.max_groups):
             group = Group()
-            excluded_this_group = set()
-            group_dps_usage = {role: 0 for role in DPS_ROLES}
+            excluded: Set[Player] = set()
 
-            while group.get_needed_roles():
-                needed_roles = group.get_needed_roles()
-
-                if not needed_roles:
+            ok = True
+            for role in FIXED_ROLES:
+                if not self._fill_role(group, role, excluded):
+                    logger.warning(f'Cannot fill group {group_idx + 1}: missing {role}')
+                    ok = False
                     break
 
-                selected = None
-                selected_role = None
+            if ok and not self._fill_dps(group, excluded):
+                logger.warning(f'Cannot fill group {group_idx + 1}: not enough DPS')
+                ok = False
 
-                for needed_role in needed_roles:
-                    candidates = self._get_candidates(needed_role, excluded_this_group, group_dps_usage)
-
-                    if candidates:
-                        selected = candidates[0]
-                        selected_role = needed_role
-                        break
-
-                if selected is None:
-                    logger.warning(f'Cannot fill group {group_idx}: missing {needed_roles}')
-                    break
-
-                group.add_member(selected, selected_role)
-                excluded_this_group.add(selected)
-                self.available.remove(selected)
-
-                if selected_role in DPS_ROLES:
-                    group_dps_usage[selected_role] += 1
-                    self.dps_roles_used[selected_role] += 1
-
-            if group.is_full():
+            if ok and group.is_full():
                 self.groups.append(group)
+                if not group.is_standard():
+                    self.non_standard_groups += 1
+                    logger.warning(
+                        f'Group {len(self.groups)} has non-standard DPS composition '
+                        f'(flavors: {sorted(group.dps_flavors())}) -- raid is viable but harder'
+                    )
                 logger.info(f'Group {len(self.groups)} formed with {len(group.members)} members')
             else:
-                logger.warning(f'Incomplete group {group_idx}: {len(group.members)} members')
-                for member in group.members:
-                    self.available.add(member)
+                # Return this group's members to the pool for later groups / backup.
+                logger.warning(f'Incomplete group {group_idx + 1}: {len(group.members)} members, releasing')
+                for player in group.members:
+                    self.available.append(player)
 
         self.backup = list(self.available)
-        logger.info(f'Final: {len(self.groups)} complete groups, {len(self.backup)} backup')
+        logger.info(
+            f'Final: {len(self.groups)} complete groups '
+            f'({self.non_standard_groups} non-standard), {len(self.backup)} backup'
+        )
 
         return self.groups, self.backup

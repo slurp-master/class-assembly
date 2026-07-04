@@ -17,9 +17,8 @@ def print_initial_stats(players):
     logger.info(f'Loaded {len(players)} players')
 
     backup_count = sum(1 for p in players if p.is_backup)
-    regular_count = sum(1 for p in players if not p.is_backup)
-    logger.info(f'Player summary: Total={len(players)}, Backup={backup_count}, '
-                f'Regular={regular_count}')
+    regular_count = len(players) - backup_count
+    logger.info(f'Player summary: Total={len(players)}, Backup={backup_count}, Regular={regular_count}')
 
     logger.info('Role availability:')
     for role in ROLES:
@@ -32,51 +31,39 @@ def remove_emojis(text):
     return ''.join(c for c in text if unicodedata.category(c)[0] != 'S')
 
 
-def build_results_dataframe(groups, backup):
-    """Build dataframe with group assignments and separators"""
-    data = []
-    for group_idx, group in enumerate(groups, 1):
-
-        print(group.ordered_members())
-
-        for member in group.ordered_members():
-            clean_name = remove_emojis(member.global_name)
-            row = {'group': group_idx, 'player': clean_name}
-            for role in ROLES:
-                row[role] = '✓' if role in member.available_roles else ''
-            data.append(row)
-
-        empty_row = {'group': '', 'player': ''}
-        for role in ROLES:
-            empty_row[role] = ''
-        data.append(empty_row)
-
-        separator = {'group': 'group', 'player': 'player'}
-        for role in ROLES:
-            separator[role] = role
-        data.append(separator)
-
-    for member in backup:
-        clean_name = remove_emojis(member.global_name)
-        row = {'group': 'B', 'player': clean_name}
+def _members_dataframe(members):
+    """Dataframe of players (one row each) with a ✓ per role they're available for."""
+    rows = []
+    for member in members:
+        row = {'player': remove_emojis(member.global_name)}
         for role in ROLES:
             row[role] = '✓' if role in member.available_roles else ''
-        data.append(row)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
-    return pd.DataFrame(data)
 
-
-def print_results(groups, backup, df):
-    """Print results table and summary"""
+def print_results(groups, backup):
+    """Print each group as its own table, then the backup, then a summary."""
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', None)
-    print('\n')
-    print(df.to_string(index=False))
+
+    for group_idx, group in enumerate(groups, 1):
+        members = [a.player for a in group.ordered_members()]
+        df = _members_dataframe(members)
+        print(f'\nGroup {group_idx}')
+        print(df.to_string(index=False))
+
+    if backup:
+        print('\nBackup')
+        print(_members_dataframe(backup).to_string(index=False))
+
+    total_in_groups = sum(len(g.members) for g in groups)
+    logger.info('Assembly Summary:')
     logger.info(f'  Groups: {len(groups)}')
-    logger.info(f'  Players in groups: {sum(len(g.members) for g in groups)}')
+    logger.info(f'  Players in groups: {total_in_groups}')
     logger.info(f'  Backup: {len(backup)}')
-    logger.info(f'  Total: {sum(len(g.members) for g in groups) + len(backup)}')
+    logger.info(f'  Total: {total_in_groups + len(backup)}')
 
 
 def main(seed=None):
@@ -89,22 +76,14 @@ def main(seed=None):
     assembly = GroupAssembly(players, seed=seed)
     groups, backup = assembly.assemble_groups()
 
-    logger.info('Balancing groups by experience (role flexibility)...')
+    logger.info('Balancing groups by experience...')
     swaps = swap_members_for_balance(groups)
     logger.info(f'Completed {swaps} swaps')
 
-    total_in_groups = sum(len(g.members) for g in groups)
-    logger.info(f'Assembly Summary:')
-    logger.info(f'  Groups: {len(groups)}')
-    logger.info(f'  Players in groups: {total_in_groups}')
-    logger.info(f'  Backup: {len(backup)}')
-    logger.info(f'  Total: {total_in_groups + len(backup)}')
-
     export_groups_to_csv(groups, backup, 'data/020_setup/setup.csv')
 
-    df = build_results_dataframe(groups, backup)
     log_group_balance(groups)
-    print_results(groups, backup, df)
+    print_results(groups, backup)
 
 
 if __name__ == '__main__':

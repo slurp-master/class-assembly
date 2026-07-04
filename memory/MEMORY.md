@@ -1,0 +1,1 @@
+- [Fat models preference](fat-models-preference.md) — single-object logic lives as methods on the class, not free functions

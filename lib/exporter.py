@@ -9,13 +9,18 @@ logger = setup_logging(__name__)
 ROLE_COLUMNS = ['tank', 'pure', 'shield', 'melee', 'caster', 'ranged']
 
 
-def export_groups_to_csv(groups: List[Group], backup: List[Player],
-                         output_path: str):
-    """Export group assignments to CSV using pandas dataframe"""
+def export_groups_to_csv(groups: List[Group], backup: List[Player], output_path: str):
+    """Export group assignments to CSV using a pandas dataframe.
+
+    Emits role-availability flags so the setup can be imported into other systems.
+    The group is a viable combination; players pick their actual role once formed, so
+    no role is assigned in the output.
+    """
     data = []
 
     for group_idx, group in enumerate(groups, 1):
-        for member in group.ordered_members():
+        for assignment in group.ordered_members():
+            member = assignment.player
             row = {
                 'group_id': group_idx,
                 'global_name': member.global_name,
