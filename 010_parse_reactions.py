@@ -1,6 +1,9 @@
 import json
 import pandas as pd
 from pathlib import Path
+from lib.logging_setup import setup_logging
+
+logger = setup_logging(__name__)
 
 
 def main():
@@ -67,13 +70,23 @@ def main():
     matched = set(df.loc[df['raid_leader'], 'global_name'])
     missing = [name for name in raid_leaders if name not in matched]
     if missing:
-        print(f'WARNING: raid leaders not found among signups: {missing}')
+        logger.warning(f'Raid leaders not found among signups: {missing}')
+
+    # 'check' confirms a real signup. Any reaction (a party role or backup) without a
+    # check-in likely means someone clicked by accident. Warn so the organizer can follow
+    # up; the rows are kept in the CSV either way.
+    reaction_cols = [r for r in roles if r != 'check']
+    if 'check' in df.columns and reaction_cols:
+        reacted = df[reaction_cols].any(axis=1)
+        not_checked_in = reacted & ~df['check']
+        offenders = list(df.loc[not_checked_in, 'global_name'])
+        if offenders:
+            logger.warning(f'Reacted but did not check in: {offenders}')
 
     df.to_csv('./data/010_reactions/reactions.csv', index=False)
-    print(f'Saved!')
-    print(f'Total users: {len(df)}')
-    print(f'Raid leaders matched: {len(matched)} of {len(raid_leaders)}')
-    print(f'Columns: {list(df.columns)}')
+    logger.info(f'Saved {len(df)} users to reactions.csv')
+    logger.info(f'Raid leaders matched: {len(matched)} of {len(raid_leaders)}')
+    logger.info(f'Columns: {list(df.columns)}')
 
 
 if __name__ == '__main__':

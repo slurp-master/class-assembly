@@ -4,12 +4,12 @@ from lib.grouper import GroupAssembly
 ALL_ROLES = ('tank', 'pure', 'shield', 'melee', 'ranged', 'caster')
 
 
-def player(username, roles=ALL_ROLES, is_raid_leader=False):
+def player(username, roles=ALL_ROLES, is_raid_leader=False, is_backup=False):
     return Player(
         username=username,
         global_name=username,
         available_roles=frozenset(roles),
-        is_backup=False,
+        is_backup=is_backup,
         is_raid_leader=is_raid_leader,
     )
 
@@ -215,3 +215,38 @@ class TestGroupAssembly:
         assert not subject.is_standard()               # soft rule relaxed: ranged missing
         assert subject.dps_flavors() == {'melee', 'caster'}
         assert assembly.non_standard_groups == 1
+
+    # --- bench-first backups: backups only fill gaps regulars cannot cover ---
+
+    def test_it_benches_backups_when_regulars_can_fill_every_slot(self):
+        # 8 regulars can form the one group; 3 backups (also omni) must be benched.
+        regulars = [player(f'r{i}', roles=ALL_ROLES, is_raid_leader=(i == 0)) for i in range(8)]
+        backups = [player(f'b{i}', roles=ALL_ROLES, is_backup=True) for i in range(3)]
+        groups, backup = assemble(regulars + backups)
+        assert len(groups) == 1
+        # None of the grouped players is a backup; all backups sit on the bench.
+        assert all(not p.is_backup for p in groups[0].members)
+        assert {p.username for p in backup} == {'b0', 'b1', 'b2'}
+
+    def test_it_uses_a_backup_only_to_fill_a_slot_no_regular_can_cover(self):
+        # Regulars cover everything except shield; the sole shield player is a backup.
+        # Bench-first must still pull that backup in, or the group can't form.
+        non_shield = tuple(r for r in ALL_ROLES if r != 'shield')
+        regulars = [player(f'r{i}', roles=non_shield, is_raid_leader=(i == 0)) for i in range(7)]
+        shield_backup = player('shield_backup', roles=('shield',), is_backup=True)
+        groups, backup = assemble(regulars + [shield_backup])
+        assert len(groups) == 1
+        assert backup == []
+        # The backup was used because no regular could shield.
+        assert shield_backup in groups[0].members
+
+    def test_it_prefers_a_non_backup_raid_leader_over_a_backup_one(self):
+        # Two raid leaders available for one group: one regular, one backup. The regular
+        # should be seated; the backup benched.
+        regular_rl = player('regular_rl', roles=ALL_ROLES, is_raid_leader=True)
+        backup_rl = player('backup_rl', roles=ALL_ROLES, is_raid_leader=True, is_backup=True)
+        filler = [player(f'f{i}', roles=ALL_ROLES) for i in range(9)]
+        groups, backup = assemble([regular_rl, backup_rl] + filler)
+        assert len(groups) == 1
+        assert regular_rl in groups[0].members
+        assert backup_rl in backup

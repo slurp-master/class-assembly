@@ -13,6 +13,11 @@ composition, so an organizer doesn't have to do it by hand.
    `raid_leader`. Raid leaders are supplied out-of-band (a hard-coded list of
    `global_name`s in the script, *not* present in the reaction JSON) and matched by name;
    the script warns if any named leader isn't found among signups.
+   - The `check` reaction is an **attendance confirmation**, not a role — it exists to
+     confirm someone actually signed up rather than mis-clicking. The script warns about
+     anyone who reacted with *anything* (a party role or `backup`) but did *not* check in
+     (kept in the CSV; warn-only). The loader never treats `check` (or `backup`/
+     `raid_leader`) as a role.
 2. `020_create_setup.py` — loads players from `reactions.csv`, assembles groups
    (greedy constructor), balances them by experience (swap-based local search), and
    writes `data/020_setup/setup.csv` plus a human-readable console preview.
@@ -47,8 +52,12 @@ composition, so an organizer doesn't have to do it by hand.
     to `N` further groups may form leaderless. Such groups are flagged as needing a raid
     leader in both outputs and never have their (nonexistent) raid leader "protected" by
     balancing swaps.
-- **Maximize the number of complete groups.** Players who don't fit go to the bench;
-  players who opted into `backup` are the natural bench candidates.
+- **Maximize the number of complete groups.** Players who don't fit go to the bench.
+- **Backups are bench-first.** Players who opted into `backup` are the natural bench
+  candidates: the grouper fills every slot from regular signups first and only pulls in a
+  backup when no regular can cover a slot (including the raid-leader seat). Backups still
+  count toward the group-count cap — bench-first is an *ordering* preference, not an
+  exclusion, so a backup will be used if a group genuinely needs them.
 
 ## Experience & balancing
 
@@ -61,6 +70,11 @@ composition, so an organizer doesn't have to do it by hand.
   produced by a **single provider function** (currently returns `num_roles`). The
   balancer reads that field, never `num_roles` directly — so swapping in a real source
   later touches exactly one place.
+- **Balancing only redistributes already-grouped players; the bench is frozen.** Swaps
+  happen between formed groups, never between a group and the backup pool. This is
+  deliberate: getting every regular signup *into* a group takes priority over group
+  balance, so balancing must never pull a grouped player out to the bench to even out
+  experience. (A future bench↔group swap feature would trade off against this priority.)
 
 ## Approach
 

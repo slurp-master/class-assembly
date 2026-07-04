@@ -21,7 +21,6 @@ class GroupAssembly:
         self.backup: List[Player] = []
         self.phantom_rl = phantom_rl
         self.non_standard_groups = 0
-        self._reserved_rl = 0
         self.max_groups = self.calculate_max_groups()
 
     def calculate_max_groups(self) -> int:
@@ -60,25 +59,27 @@ class GroupAssembly:
     def _available_rl_count(self) -> int:
         return sum(1 for p in self.available if p.is_raid_leader)
 
-    def _candidates_for(self, role: str, excluded: Set[Player]) -> List[Player]:
+    def _candidates_for(self, role: str, excluded: Set[Player], reserved_rl: int) -> List[Player]:
         candidates = [p for p in self.available if p not in excluded and p.can(role)]
         # Reserve raid leaders for the groups that still need one: don't let ordinary
         # role-filling drain the RL pool below what later groups require. If excluding
         # RLs would leave no candidate for this slot, fall back to allowing them.
-        if self._available_rl_count() <= self._reserved_rl:
+        if self._available_rl_count() <= reserved_rl:
             non_rl = [p for p in candidates if not p.is_raid_leader]
             if non_rl:
-                return non_rl
-        return candidates
+                candidates = non_rl
+        # Bench-first: backups only fill slots that no regular signup can cover.
+        non_backup = [p for p in candidates if not p.is_backup]
+        return non_backup if non_backup else candidates
 
     def _take(self, group: Group, player: Player, role: str, excluded: Set[Player]):
         group.add(player, role)
         excluded.add(player)
         self.available.remove(player)
 
-    def _fill_role(self, group: Group, role: str, excluded: Set[Player]) -> bool:
+    def _fill_role(self, group: Group, role: str, excluded: Set[Player], reserved_rl: int) -> bool:
         """Try to fill one slot of the given role. Returns True on success."""
-        chosen = self._pick(self._candidates_for(role, excluded))
+        chosen = self._pick(self._candidates_for(role, excluded, reserved_rl))
         if chosen is None:
             return False
         self._take(group, chosen, role, excluded)
@@ -110,10 +111,10 @@ class GroupAssembly:
         A DPS-only leader is placed into a concrete DPS flavor (the ``'dps'`` placeholder
         is resolved). Returns True if a raid leader was seated.
         """
-        # Most-constrained first; random tie-break (seeded) among equally-constrained.
+        # Non-backup first (bench-first), then most-constrained; random tie-break (seeded).
         raid_leaders = [p for p in self.available if p.is_raid_leader]
         self.rng.shuffle(raid_leaders)
-        raid_leaders.sort(key=lambda p: p.num_roles)
+        raid_leaders.sort(key=lambda p: (p.is_backup, p.num_roles))
 
         for rl in raid_leaders:
             role = self._seatable_role(group, rl, roles_left)
@@ -125,7 +126,7 @@ class GroupAssembly:
                 return True
         return False
 
-    def _fill_dps(self, group: Group, roles_left: List[str], excluded: Set[Player]) -> bool:
+    def _fill_dps(self, group: Group, roles_left: List[str], excluded: Set[Player], reserved_rl: int) -> bool:
         """Fill the remaining DPS slots in ``roles_left``. Cover all three flavors when
         possible (hard rule when achievable), relaxing to fewer flavors only when no
         strict candidate exists. Returns True if all DPS slots were filled."""
@@ -136,7 +137,7 @@ class GroupAssembly:
             # available flavor if none of the missing flavors has a candidate.
             filled = False
             for role in missing + DPS_ROLES:
-                if self._fill_role(group, role, excluded):
+                if self._fill_role(group, role, excluded, reserved_rl):
                     filled = True
                     break
             if not filled:
@@ -149,7 +150,6 @@ class GroupAssembly:
         reserved_rl: raid leaders that must be left in the pool for later groups, so
         ordinary role-filling in this group won't consume them.
         """
-        self._reserved_rl = reserved_rl
         group = Group(needs_raid_leader=needs_raid_leader)
         excluded: Set[Player] = set()
         # A 'dps' placeholder slot is resolved to a concrete flavor at fill time.
@@ -163,14 +163,14 @@ class GroupAssembly:
         for role in list(roles_left):
             if role == 'dps':
                 continue
-            if self._fill_role(group, role, excluded):
+            if self._fill_role(group, role, excluded, reserved_rl):
                 roles_left.remove(role)
             else:
                 logger.warning(f'Cannot complete a group: missing {role}')
                 self._release(group)
                 return None
 
-        if not self._fill_dps(group, roles_left, excluded):
+        if not self._fill_dps(group, roles_left, excluded, reserved_rl):
             logger.warning('Cannot complete a group: not enough DPS')
             self._release(group)
             return None

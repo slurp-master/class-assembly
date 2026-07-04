@@ -1,1 +1,2 @@
 - [Fat models preference](fat-models-preference.md) — single-object logic lives as methods on the class, not free functions
+- [Step 010 is temporary](step-010-is-temporary.md) — reaction parser is throwaway scaffolding, don't test or over-harden it
