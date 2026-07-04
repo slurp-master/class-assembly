@@ -140,6 +140,10 @@ output on failure. No `unittest`. Conventions:
   the compared values, so the helper methods add nothing but noise.
 - Don't lean on parametrization — prefer one clearly-named test per behavior so a failure
   name tells you exactly what broke.
+- Shared test helpers live in `tests/factories.py` (e.g. `make_player`), imported by the
+  per-object test files rather than re-declared in each. A plain importable module (not
+  `conftest.py`, which is reserved for pytest fixtures/hooks) keeps the factory explicit
+  at each call site.
 
 Run with: `uv run pytest` (config in `pyproject.toml` sets `testpaths` and `pythonpath`,
 so no `PYTHONPATH=.` needed).

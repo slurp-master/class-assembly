@@ -1,13 +1,5 @@
-from lib.models import Player, Assignment
-
-
-def make_player(username='alice', roles=('tank',)):
-    return Player(
-        username=username,
-        global_name=username.title(),
-        available_roles=frozenset(roles),
-        is_backup=False,
-    )
+from lib.models import Assignment
+from tests.factories import make_player
 
 
 class TestAssignment:

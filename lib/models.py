@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass
 from typing import List, Set
 
@@ -104,8 +105,32 @@ class Group:
         self.assignments.append(Assignment(player=theirs.player, role=mine.role))
         other.assignments.append(Assignment(player=mine.player, role=theirs.role))
 
+    def role_counts(self) -> Counter:
+        """How many assignments this group holds per role."""
+        return Counter(a.role for a in self.assignments)
+
+    def has_valid_composition(self) -> bool:
+        """True if the assigned roles match the fixed composition: the exact tank/pure/
+        shield counts plus DPS_SLOTS DPS across the three flavors.
+
+        Count alone is not enough -- eight tanks fills every seat but is not a raid group.
+        This is the trustworthy 'is this a real, complete group' check.
+        """
+        counts = self.role_counts()
+        fixed_needed = Counter(FIXED_ROLES)
+        if any(counts.get(role, 0) != n for role, n in fixed_needed.items()):
+            return False
+        dps = sum(counts.get(flavor, 0) for flavor in DPS_ROLES)
+        # Any leftover roles outside the fixed set and DPS flavors make it invalid.
+        known = set(fixed_needed) | set(DPS_ROLES)
+        if any(role not in known for role in counts):
+            return False
+        return dps == DPS_SLOTS
+
     def is_full(self) -> bool:
-        return len(self.assignments) == GROUP_SIZE
+        """A group is complete only when its seats are filled *and* the composition is
+        valid -- a count of eight with the wrong roles is not a full group."""
+        return len(self.assignments) == GROUP_SIZE and self.has_valid_composition()
 
     def dps_flavors(self) -> Set[str]:
         """DPS flavors currently present among assigned roles."""

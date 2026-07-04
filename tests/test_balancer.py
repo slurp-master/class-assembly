@@ -1,17 +1,8 @@
 from collections import Counter
 
-from lib.models import Player, Group
+from lib.models import Group
 from lib.balancer import calculate_group_imbalance, swap_members_for_balance
-
-
-def player(username, roles, is_raid_leader=False):
-    return Player(
-        username=username,
-        global_name=username,
-        available_roles=frozenset(roles),
-        is_backup=False,
-        is_raid_leader=is_raid_leader,
-    )
+from tests.factories import make_player as player
 
 
 def group(assignments, needs_raid_leader=False):

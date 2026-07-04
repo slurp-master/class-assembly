@@ -1,14 +1,5 @@
 from lib.models import Player
-
-
-def make_player(username='alice', roles=('tank',), is_backup=False, is_raid_leader=False):
-    return Player(
-        username=username,
-        global_name=username.title(),
-        available_roles=frozenset(roles),
-        is_backup=is_backup,
-        is_raid_leader=is_raid_leader,
-    )
+from tests.factories import make_player
 
 
 class TestPlayer:

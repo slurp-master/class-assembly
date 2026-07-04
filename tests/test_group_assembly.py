@@ -1,17 +1,14 @@
-from lib.models import Player, GROUP_SIZE, DPS_ROLES
+from lib.models import GROUP_SIZE, DPS_ROLES
 from lib.grouper import GroupAssembly
+from tests.factories import make_player
 
 ALL_ROLES = ('tank', 'pure', 'shield', 'melee', 'ranged', 'caster')
 
 
 def player(username, roles=ALL_ROLES, is_raid_leader=False, is_backup=False):
-    return Player(
-        username=username,
-        global_name=username,
-        available_roles=frozenset(roles),
-        is_backup=is_backup,
-        is_raid_leader=is_raid_leader,
-    )
+    """An omni-role player by default -- most assembly tests want players who can fill
+    any slot so role scarcity is controlled explicitly per test."""
+    return make_player(username, roles=roles, is_backup=is_backup, is_raid_leader=is_raid_leader)
 
 
 def omni_roster(count, raid_leaders):

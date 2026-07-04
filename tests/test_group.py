@@ -1,14 +1,5 @@
-from lib.models import Player, Group, GROUP_SIZE
-
-
-def make_player(username='alice', roles=('tank',), is_raid_leader=False):
-    return Player(
-        username=username,
-        global_name=username.title(),
-        available_roles=frozenset(roles),
-        is_backup=False,
-        is_raid_leader=is_raid_leader,
-    )
+from lib.models import Group, GROUP_SIZE
+from tests.factories import make_player
 
 
 def fill_group(group, roles):
@@ -37,6 +28,30 @@ class TestGroup:
         subject = Group()
         fill_group(subject, STANDARD_ROLES)
         assert subject.is_full()
+
+    def test_it_is_not_full_when_group_size_is_reached_with_the_wrong_roles(self):
+        # Eight players fills every seat, but eight tanks is not a raid group -- count
+        # alone must not report a group as full.
+        subject = Group()
+        fill_group(subject, ['tank'] * GROUP_SIZE)
+        assert not subject.is_full()
+
+    def test_it_reports_a_valid_composition_for_the_fixed_layout(self):
+        subject = Group()
+        fill_group(subject, STANDARD_ROLES)
+        assert subject.has_valid_composition()
+
+    def test_it_accepts_a_relaxed_dps_layout_as_a_valid_composition(self):
+        # 2/1/1/4 with only two DPS flavors is still a valid (if non-standard) composition.
+        subject = Group()
+        fill_group(subject, ['tank', 'tank', 'pure', 'shield', 'melee', 'melee', 'caster', 'caster'])
+        assert subject.has_valid_composition()
+
+    def test_it_rejects_a_composition_with_the_wrong_fixed_role_counts(self):
+        # An extra tank in place of a healer breaks the fixed composition.
+        subject = Group()
+        fill_group(subject, ['tank', 'tank', 'tank', 'shield', 'melee', 'ranged', 'caster', 'melee'])
+        assert not subject.has_valid_composition()
 
     def test_it_sums_member_experience(self):
         subject = Group()

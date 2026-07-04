@@ -5,15 +5,18 @@ from lib.logging_setup import setup_logging
 logger = setup_logging(__name__)
 
 
-def calculate_group_imbalance(groups: List[Group]) -> float:
-    """Calculate imbalance metric (std deviation of group experiences)"""
-    if not groups:
+def _imbalance(experiences: List[int]) -> float:
+    """Std deviation of a list of group experience totals."""
+    if not experiences:
         return 0.0
-
-    experiences = [g.experience for g in groups]
     mean = sum(experiences) / len(experiences)
     variance = sum((x - mean) ** 2 for x in experiences) / len(experiences)
     return variance ** 0.5
+
+
+def calculate_group_imbalance(groups: List[Group]) -> float:
+    """Calculate imbalance metric (std deviation of group experiences)"""
+    return _imbalance([g.experience for g in groups])
 
 
 def swap_members_for_balance(groups: List[Group], max_iterations: int = 100) -> int:
@@ -28,11 +31,12 @@ def swap_members_for_balance(groups: List[Group], max_iterations: int = 100) -> 
     improved = 0
 
     for iteration in range(max_iterations):
-        best_imbalance = calculate_group_imbalance(groups)
+        experiences = [g.experience for g in groups]
+        best_imbalance = _imbalance(experiences)
         best_swap: Optional[Tuple[Group, Assignment, Group, Assignment]] = None
 
         for i, group1 in enumerate(groups):
-            for group2 in groups[i + 1:]:
+            for j, group2 in enumerate(groups[i + 1:], start=i + 1):
                 for a in group1.assignments:
                     for b in group2.assignments:
                         if not a.can_swap_with(b):
@@ -42,10 +46,14 @@ def swap_members_for_balance(groups: List[Group], max_iterations: int = 100) -> 
                         if not group2.swap_keeps_raid_leader(b, a.player):
                             continue
 
-                        group1.swap(a, group2, b)
-                        new_imbalance = calculate_group_imbalance(groups)
-                        # revert (the swapped-in assignments are the last appended)
-                        group1.swap(group1.assignments[-1], group2, group2.assignments[-1])
+                        # A swap only moves a.experience and b.experience between the two
+                        # groups; evaluate the resulting imbalance arithmetically rather
+                        # than mutating and reverting the groups.
+                        delta = b.experience - a.experience
+                        trial = list(experiences)
+                        trial[i] = experiences[i] + delta
+                        trial[j] = experiences[j] - delta
+                        new_imbalance = _imbalance(trial)
 
                         if new_imbalance < best_imbalance:
                             best_imbalance = new_imbalance
