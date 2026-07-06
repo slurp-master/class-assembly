@@ -7,6 +7,14 @@ logger = setup_logging(__name__)
 _ALL_ROLES = frozenset(FIXED_ROLES) | frozenset(DPS_ROLES)
 
 
+def _can_fill_slot(player: Player, slot: str) -> bool:
+    """True if ``player`` can fill ``slot``.
+
+    ``'dps'`` matches any DPS flavor; all other slots are a direct role lookup.
+    """
+    return any(player.can(f) for f in DPS_ROLES) if slot == 'dps' else player.can(slot)
+
+
 def _make_phantoms(count: int) -> list[Player]:
     """Create ``count`` placeholder RL players, cycling through PHANTOM_RL_NAMES."""
     names = [PHANTOM_RL_NAMES[i % len(PHANTOM_RL_NAMES)] for i in range(count)]
@@ -105,9 +113,8 @@ class GroupAssembly:
             # Lower value = higher priority.
             return (not partner_here, not partner_available, p.num_roles, p.username)
 
-        keyed = sorted((priority(p), p) for p in candidates)
-        best = keyed[0][0]
-        top = [p for key, p in keyed if key == best]
+        best = min(priority(p) for p in candidates)
+        top = [p for p in candidates if priority(p) == best]
         return self._rng.choice(top)
 
     def _available_rl_count(self) -> int:
@@ -120,9 +127,9 @@ class GroupAssembly:
         return sum(1 for p in self._available if p.is_raid_leader and not p.is_phantom_rl)
 
     def _candidates_for(
-        self, role: str, excluded: set[Player], reserved_rl: int, group: Group = None
+        self, slot: str, excluded: set[Player], reserved_rl: int, group: Group = None
     ) -> list[Player]:
-        candidates = [p for p in self._available if p not in excluded and p.can(role)]
+        candidates = [p for p in self._available if p not in excluded and _can_fill_slot(p, slot)]
         # Reserve raid leaders for the groups that still need one: don't let ordinary
         # role-filling drain the RL pool below what later groups require. If excluding
         # RLs would leave no candidate for this slot, fall back to allowing them.
@@ -147,30 +154,41 @@ class GroupAssembly:
         excluded.add(player)
         self._available.remove(player)
 
-    def _fill_role(self, group: Group, role: str, excluded: set[Player], reserved_rl: int) -> bool:
-        """Try to fill one slot of the given role. Returns True on success."""
-        chosen = self._pick(self._candidates_for(role, excluded, reserved_rl, group=group), group=group)
+    def _fill_slot(self, group: Group, slot: str, excluded: set[Player], reserved_rl: int) -> bool:
+        """Fill one slot (fixed role or ``'dps'``). Returns True on success.
+
+        For ``'dps'`` slots the concrete flavor is resolved at fill time, preferring
+        flavors not yet present in the group.
+        """
+        chosen = self._pick(self._candidates_for(slot, excluded, reserved_rl, group=group), group=group)
         if chosen is None:
             return False
+        role = self._resolve_dps_flavor(group, chosen) if slot == 'dps' else slot
         self._take(group, chosen, role, excluded)
         return True
 
-    def _seatable_role(self, group: Group, player: Player, roles_left: list[str]) -> str | None:
-        """A concrete role from ``roles_left`` this player can fill, or None.
+    def _seatable_slot(self, group: Group, player: Player, roles_left: list[str]) -> str | None:
+        """The first slot in ``roles_left`` this player can fill, or None.
 
-        The ``'dps'`` placeholder matches any DPS flavor the player can play; we return
-        the concrete flavor (preferring one still missing from the group, for variety) so
-        the caller can record a real role. Fixed roles match directly.
+        Returns the slot name as stored — ``'dps'`` if the player can fill any DPS flavor,
+        or the concrete fixed role name. Callers use ``_resolve_dps_flavor`` to get the
+        concrete flavor when the returned slot is ``'dps'``.
         """
-        if any(r == 'dps' for r in roles_left):
-            missing = [r for r in DPS_ROLES if r not in group.dps_flavors()]
-            for flavor in missing + DPS_ROLES:
-                if player.can(flavor):
-                    return flavor
-        for role in roles_left:
-            if role != 'dps' and player.can(role):
-                return role
+        for slot in roles_left:
+            if _can_fill_slot(player, slot):
+                return slot
         return None
+
+    def _resolve_dps_flavor(self, group: Group, player: Player) -> str:
+        """Concrete DPS flavor for a player filling a ``'dps'`` slot.
+
+        Prefers flavors not yet present in the group for variety; falls back to any flavor
+        the player can fill. Assumes the player can fill at least one DPS flavor.
+        """
+        missing = [f for f in DPS_ROLES if f not in group.dps_flavors()]
+        for flavor in missing + DPS_ROLES:
+            if player.can(flavor):
+                return flavor
 
     def _seat_raid_leader(
         self, group: Group, roles_left: list[str], excluded: set[Player]
@@ -189,32 +207,13 @@ class GroupAssembly:
         raid_leaders.sort(key=lambda p: (p.is_phantom_rl, p.is_backup, p.num_roles))
 
         for rl in raid_leaders:
-            role = self._seatable_role(group, rl, roles_left)
-            if role is not None:
-                # Consume one matching slot: the concrete fixed role, or one 'dps'
-                # placeholder if the leader took a DPS flavor.
-                roles_left.remove(role if role in roles_left else 'dps')
+            slot = self._seatable_slot(group, rl, roles_left)
+            if slot is not None:
+                role = self._resolve_dps_flavor(group, rl) if slot == 'dps' else slot
+                roles_left.remove(slot)
                 self._take(group, rl, role, excluded)
                 return rl
         return None
-
-    def _fill_dps(self, group: Group, roles_left: list[str], excluded: set[Player], reserved_rl: int) -> bool:
-        """Fill the remaining DPS slots in ``roles_left``. Cover all three flavors when
-        possible (hard rule when achievable), relaxing to fewer flavors only when no
-        strict candidate exists. Returns True if all DPS slots were filled."""
-        dps_slots = [r for r in roles_left if r == 'dps']
-        for _ in dps_slots:
-            missing = [r for r in DPS_ROLES if r not in group.dps_flavors()]
-            # Prefer flavors still missing so we cover all three; only relax to any
-            # available flavor if none of the missing flavors has a candidate.
-            filled = False
-            for role in missing + DPS_ROLES:
-                if self._fill_role(group, role, excluded, reserved_rl):
-                    filled = True
-                    break
-            if not filled:
-                return False
-        return True
 
     def _build_group(self, reserved_rl: int = 0) -> Group | None:
         """Build one complete group, or return None (releasing any partial members).
@@ -224,27 +223,17 @@ class GroupAssembly:
         """
         group = Group()
         excluded: set[Player] = set()
-        # A 'dps' placeholder slot is resolved to a concrete flavor at fill time.
-        roles_left: list[str] = list(FIXED_ROLES) + ['dps'] * DPS_SLOTS
+        slots: list[str] = list(FIXED_ROLES) + ['dps'] * DPS_SLOTS
 
-        if self._seat_raid_leader(group, roles_left, excluded) is None:
+        if self._seat_raid_leader(group, slots, excluded) is None:
             self._release(group)
             return None
 
-        # Fill fixed (non-DPS) roles still outstanding.
-        for role in list(roles_left):
-            if role == 'dps':
-                continue
-            if not self._fill_role(group, role, excluded, reserved_rl):
-                logger.warning(f'Cannot complete a group: missing {role}')
+        for slot in slots:
+            if not self._fill_slot(group, slot, excluded, reserved_rl):
+                logger.warning(f'Cannot complete a group: missing {slot}')
                 self._release(group)
                 return None
-            roles_left.remove(role)
-
-        if not self._fill_dps(group, roles_left, excluded, reserved_rl):
-            logger.warning('Cannot complete a group: not enough DPS')
-            self._release(group)
-            return None
 
         return group if group.is_full() else self._release(group)
 
