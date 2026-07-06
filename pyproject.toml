@@ -1,7 +1,7 @@
 [project]
-name = "syncademy-setup-creation-playground"
+name = "class-assembly"
 version = "0.1.0"
-description = "Add your description here"
+description = "It's raiding time!"
 readme = "README.md"
 requires-python = ">=3.12.4"
 dependencies = [
