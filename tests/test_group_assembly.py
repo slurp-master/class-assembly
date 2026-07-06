@@ -1,4 +1,4 @@
-from lib.models import GROUP_SIZE, DPS_ROLES
+from lib.models import GROUP_SIZE, DPS_ROLES, PHANTOM_RL_NAMES
 from lib.grouper import GroupAssembly
 from lib.balancer import swap_members_for_balance
 from tests.factories import make_player
@@ -156,7 +156,7 @@ class TestGroupAssembly:
             assert group.has_raid_leader
 
     def test_phantom_raid_leaders_extend_the_group_count_past_real_leaders(self):
-        # 2 real leaders + allow 2 phantom -> 4 groups, last two leaderless.
+        # 2 real leaders + allow 2 phantom -> 4 groups, last two with placeholder RLs.
         players = omni_roster(count=32, raid_leaders=2)
         groups, backup, _ = assemble(players, phantom_rl=2)
         assert len(groups) == 4
@@ -165,7 +165,57 @@ class TestGroupAssembly:
         assert len(real_led) == 2
         assert len(phantom) == 2
         assert all(g.has_raid_leader for g in real_led)
-        assert all(not g.has_raid_leader for g in phantom)
+        # Phantom groups have a placeholder RL occupying one slot; they still have a
+        # raid leader (the placeholder), but needs_raid_leader flags that a real one is
+        # still required. Each phantom group has exactly 8 members.
+        assert all(g.has_raid_leader for g in phantom)
+        assert all(len(g.members) == GROUP_SIZE for g in phantom)
+
+    def test_phantom_group_has_exactly_eight_members_including_placeholder(self):
+        # Before the fix, phantom groups only got 7 real players; now the placeholder
+        # fills the 8th slot so every group is a full GROUP_SIZE.
+        players = omni_roster(count=15, raid_leaders=1)  # 1 real RL, 1 phantom allowed -> 2 groups
+        groups, backup, _ = assemble(players, phantom_rl=1)
+        assert len(groups) == 2
+        phantom_groups = [g for g in groups if g.needs_raid_leader]
+        assert len(phantom_groups) == 1
+        assert len(phantom_groups[0].members) == GROUP_SIZE
+
+    def test_phantom_placeholder_uses_a_name_from_the_cycle(self):
+        players = omni_roster(count=15, raid_leaders=1)
+        groups, _, _ = assemble(players, phantom_rl=1)
+        phantom_groups = [g for g in groups if g.needs_raid_leader]
+        phantom_names = {p.global_name for p in phantom_groups[0].members}
+        assert phantom_names & set(PHANTOM_RL_NAMES), 'no placeholder name found in phantom group'
+
+    def test_phantom_placeholder_is_not_on_the_bench(self):
+        # The placeholder should only exist inside its group, not in the backup list.
+        players = omni_roster(count=15, raid_leaders=1)
+        _, backup, _ = assemble(players, phantom_rl=1)
+        assert all(p.global_name not in PHANTOM_RL_NAMES for p in backup)
+
+    def test_phantom_placeholder_is_not_swapped_during_balancing(self):
+        # Build two groups: one real-RL, one phantom. The phantom group is imbalanced
+        # (its placeholder is flex/high-exp); balancing must not swap the placeholder out.
+        players = omni_roster(count=15, raid_leaders=1)
+        groups, _, _ = assemble(players, phantom_rl=1)
+        phantom_group = next(g for g in groups if g.needs_raid_leader)
+        placeholder = next(p for p in phantom_group.members if p.global_name in PHANTOM_RL_NAMES)
+        swap_members_for_balance(groups)
+        assert placeholder in phantom_group.members
+
+    def test_multiple_phantom_groups_get_distinct_placeholder_names(self):
+        # With 3 phantom groups allowed, each should draw from the cycle (may repeat after
+        # exhausting the list, but sequential ones should differ when the list is long enough).
+        players = omni_roster(count=21, raid_leaders=0)
+        groups, _, _ = assemble(players, phantom_rl=3)
+        assert len(groups) == 3
+        placeholders = [
+            next(p for p in g.members if p.global_name in PHANTOM_RL_NAMES)
+            for g in groups if g.needs_raid_leader
+        ]
+        # All three PHANTOM_RL_NAMES should be used (the cycle exhausts before repeating).
+        assert {p.global_name for p in placeholders} == set(PHANTOM_RL_NAMES)
 
     def test_an_inflexible_raid_leader_is_seated_and_does_not_cost_a_group(self):
         # One caster-only RL among otherwise-omni RLs. It must still be seated (into a DPS

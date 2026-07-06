@@ -36,7 +36,13 @@ def remove_emojis(text: str) -> str:
 def _members_dataframe(members: list[Player]) -> pd.DataFrame:
     rows = []
     for member in members:
-        row = {'player': remove_emojis(member.global_name), 'RL': '★' if member.is_raid_leader else ''}
+        if member.is_phantom_rl:
+            rl_marker = '?'
+        elif member.is_raid_leader:
+            rl_marker = '★'
+        else:
+            rl_marker = ''
+        row = {'player': remove_emojis(member.global_name), 'RL': rl_marker}
         for role in ROLES:
             row[role] = '✓' if role in member.available_roles else ''
         rows.append(row)

@@ -1,8 +1,25 @@
 import random
-from lib.models import Player, Group, GROUP_SIZE, FIXED_ROLES, DPS_ROLES, DPS_SLOTS
+from lib.models import Player, Group, GROUP_SIZE, FIXED_ROLES, DPS_ROLES, DPS_SLOTS, PHANTOM_RL_NAMES
 from lib.logging_setup import setup_logging
 
 logger = setup_logging(__name__)
+
+_ALL_ROLES = frozenset(FIXED_ROLES) | frozenset(DPS_ROLES)
+
+
+def _make_phantoms(count: int) -> list[Player]:
+    """Create ``count`` placeholder RL players, cycling through PHANTOM_RL_NAMES."""
+    names = [PHANTOM_RL_NAMES[i % len(PHANTOM_RL_NAMES)] for i in range(count)]
+    return [
+        Player(
+            username=name.lower(),
+            global_name=name,
+            available_roles=_ALL_ROLES,
+            is_backup=False,
+            is_raid_leader=True,
+        )
+        for name in names
+    ]
 
 
 class GroupAssembly:
@@ -16,7 +33,9 @@ class GroupAssembly:
         """Assemble raid groups.
 
         phantom_rl: number of groups allowed to form *without* a real raid leader, once
-        the supply of actual raid leaders is exhausted. These are marked as needing a
+        the supply of actual raid leaders is exhausted. Placeholder players (drawn from
+        PHANTOM_RL_NAMES) are pre-seeded into the available pool and go through the same
+        RL-first seating path as real leaders; their groups are flagged as needing a real
         raid leader in the output.
 
         pairs: bidirectional {global_name -> partner_global_name} lookup produced by
@@ -25,32 +44,34 @@ class GroupAssembly:
         the same group. The constraint is best-effort: pairs never block group formation.
         """
         self._rng = random.Random(seed)
-        self._players = players
-        self._available: list[Player] = list(players)
+        self._real_players = players
+        phantoms = _make_phantoms(phantom_rl)
+        # Phantoms are appended after real players so real RLs are exhausted first.
+        self._available: list[Player] = list(players) + phantoms
         self._groups: list[Group] = []
         self._backup: list[Player] = []
-        self._phantom_rl = phantom_rl
         self._pairs: dict[str, str] = pairs or {}
         self._violated_pairs: list[tuple[str, str]] = []
         self._non_standard_groups = 0
         self._max_groups = self._calculate_max_groups()
 
     def _calculate_max_groups(self) -> int:
-        """Max groups given the tank/healer/raid-leader bottlenecks and total players.
+        """Max groups given the tank/healer/raid-leader bottlenecks and total pool size.
 
-        Every group needs one raid leader, so raid leaders cap the group count just like
-        tanks and healers do. Phantom-RL groups extend that cap by ``_phantom_rl``.
+        Phantoms are already in the pool, so max_by_total naturally accounts for them
+        consuming one slot each (GROUP_SIZE players per group, phantoms included).
         """
-        max_by_total = len(self._players) // GROUP_SIZE
+        pool = self._available
+        max_by_total = len(pool) // GROUP_SIZE
 
-        tanks = sum(1 for p in self._players if 'tank' in p.available_roles)
-        pure = sum(1 for p in self._players if 'pure' in p.available_roles)
-        shield = sum(1 for p in self._players if 'shield' in p.available_roles)
-        raid_leaders = sum(1 for p in self._players if p.is_raid_leader)
+        tanks = sum(1 for p in pool if 'tank' in p.available_roles)
+        pure = sum(1 for p in pool if 'pure' in p.available_roles)
+        shield = sum(1 for p in pool if 'shield' in p.available_roles)
+        raid_leaders = sum(1 for p in pool if p.is_raid_leader)
 
         max_by_tanks = tanks // 2
         max_by_healers = min(pure, shield)
-        max_by_rl = raid_leaders + self._phantom_rl
+        max_by_rl = raid_leaders  # includes phantoms
 
         return min(max_by_total, max_by_tanks, max_by_healers, max_by_rl)
 
@@ -90,7 +111,13 @@ class GroupAssembly:
         return self._rng.choice(top)
 
     def _available_rl_count(self) -> int:
-        return sum(1 for p in self._available if p.is_raid_leader)
+        """Count of real (non-phantom) raid leaders still in the pool.
+
+        Used by the reservation guard to prevent ordinary role-filling from draining real
+        RLs below what later real-RL groups need. Phantoms are excluded because they are
+        never reserved for real-RL groups.
+        """
+        return sum(1 for p in self._available if p.is_raid_leader and not p.is_phantom_rl)
 
     def _candidates_for(
         self, role: str, excluded: set[Player], reserved_rl: int, group: Group = None
@@ -145,19 +172,21 @@ class GroupAssembly:
                 return role
         return None
 
-    def _seat_raid_leader(self, group: Group, roles_left: list[str], excluded: set[Player]) -> bool:
+    def _seat_raid_leader(
+        self, group: Group, roles_left: list[str], excluded: set[Player]
+    ) -> Player | None:
         """Seat one available raid leader into a composition role they can fill.
 
         RL-first: this reserves a real raid leader before ordinary members compete for
         slots. We seat the *most constrained* raid leader (fewest playable roles) so an
         inflexible leader isn't stranded once their only viable slot is taken by others.
         A DPS-only leader is placed into a concrete DPS flavor (the ``'dps'`` placeholder
-        is resolved). Returns True if a raid leader was seated.
+        is resolved). Returns the seated Player, or None if no raid leader could be seated.
         """
-        # Non-backup first (bench-first), then most-constrained; random tie-break (seeded).
+        # Real RLs first (phantoms are last resort), then non-backup, then most-constrained.
         raid_leaders = [p for p in self._available if p.is_raid_leader]
         self._rng.shuffle(raid_leaders)
-        raid_leaders.sort(key=lambda p: (p.is_backup, p.num_roles))
+        raid_leaders.sort(key=lambda p: (p.is_phantom_rl, p.is_backup, p.num_roles))
 
         for rl in raid_leaders:
             role = self._seatable_role(group, rl, roles_left)
@@ -166,8 +195,8 @@ class GroupAssembly:
                 # placeholder if the leader took a DPS flavor.
                 roles_left.remove(role if role in roles_left else 'dps')
                 self._take(group, rl, role, excluded)
-                return True
-        return False
+                return rl
+        return None
 
     def _fill_dps(self, group: Group, roles_left: list[str], excluded: set[Player], reserved_rl: int) -> bool:
         """Fill the remaining DPS slots in ``roles_left``. Cover all three flavors when
@@ -187,18 +216,18 @@ class GroupAssembly:
                 return False
         return True
 
-    def _build_group(self, needs_raid_leader: bool, reserved_rl: int = 0) -> Group | None:
+    def _build_group(self, reserved_rl: int = 0) -> Group | None:
         """Build one complete group, or return None (releasing any partial members).
 
         reserved_rl: raid leaders that must be left in the pool for later groups, so
         ordinary role-filling in this group won't consume them.
         """
-        group = Group(needs_raid_leader=needs_raid_leader)
+        group = Group()
         excluded: set[Player] = set()
         # A 'dps' placeholder slot is resolved to a concrete flavor at fill time.
         roles_left: list[str] = list(FIXED_ROLES) + ['dps'] * DPS_SLOTS
 
-        if not needs_raid_leader and not self._seat_raid_leader(group, roles_left, excluded):
+        if self._seat_raid_leader(group, roles_left, excluded) is None:
             self._release(group)
             return None
 
@@ -227,20 +256,18 @@ class GroupAssembly:
 
     def assemble_groups(self) -> tuple[list[Group], list[Player], list[tuple[str, str]]]:
         """Greedily assemble groups. Returns (groups, backup, violated_pairs)."""
-        real_rl = sum(1 for p in self._players if p.is_raid_leader)
+        real_rl = sum(1 for p in self._real_players if p.is_raid_leader)
         # Groups that will be led by a real raid leader (the rest, if any, are phantom).
         real_rl_groups = min(self._max_groups, real_rl)
         logger.info(
-            f'Assembling up to {self._max_groups} groups from {len(self._players)} players '
-            f'({real_rl} raid leaders, {self._phantom_rl} phantom allowed)'
+            f'Assembling up to {self._max_groups} groups from {len(self._real_players)} players '
+            f'({real_rl} raid leaders, {self._max_groups - real_rl_groups} phantom allowed)'
         )
 
         for group_idx in range(self._max_groups):
-            # Real raid leaders first; once exhausted, remaining groups are phantom.
-            needs_raid_leader = not any(p.is_raid_leader for p in self._available)
             # Reserve one RL for each real-RL group still to be built after this one.
             reserved_rl = max(0, real_rl_groups - (group_idx + 1))
-            group = self._build_group(needs_raid_leader, reserved_rl=reserved_rl)
+            group = self._build_group(reserved_rl=reserved_rl)
 
             if group is None:
                 logger.warning(f'Incomplete group {group_idx + 1}, releasing members')
@@ -257,7 +284,8 @@ class GroupAssembly:
                 logger.warning(f'Group {len(self._groups)} formed WITHOUT a raid leader (phantom)')
             logger.info(f'Group {len(self._groups)} formed with {len(group.members)} members')
 
-        self._backup = list(self._available)
+        # Bench is whatever real players remain; phantoms are discarded.
+        self._backup = [p for p in self._available if not p.is_phantom_rl]
         phantom = sum(1 for g in self._groups if g.needs_raid_leader)
         logger.info(
             f'Final: {len(self._groups)} complete groups '
@@ -276,7 +304,8 @@ class GroupAssembly:
         placement: dict[str, int | None] = {}
         for idx, group in enumerate(self._groups):
             for p in group.members:
-                placement[p.global_name] = idx
+                if not p.is_phantom_rl:
+                    placement[p.global_name] = idx
         for p in self._backup:
             placement[p.global_name] = None
 

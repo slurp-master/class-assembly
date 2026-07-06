@@ -49,9 +49,13 @@ composition, so an organizer doesn't have to do it by hand.
   - **Phantom raid leaders:** setups are made ~a day before the event, so a group may be
     intentionally formed *without* a real raid leader, hoping one is found in time. This
     is opt-in via `--phantom-rl N` (default 0): once real raid leaders are exhausted, up
-    to `N` further groups may form leaderless. Such groups are flagged as needing a raid
-    leader in both outputs and never have their (nonexistent) raid leader "protected" by
-    balancing swaps.
+    to `N` further groups may form with a **placeholder** raid leader occupying one of the
+    8 composition slots. Placeholders are drawn from a cycled name list (`PHANTOM_RL_NAMES`,
+    e.g. "Raidingway", "Teachingway", "Wipingway") and are treated as flex players (can
+    fill any role). The placeholder is seated first, exactly like a real RL, before ordinary
+    role-filling. Phantom groups are flagged in both outputs: a `?` in the `RL` column in
+    the console table, and `group_needs_rl = True` in the CSV. Placeholder players are
+    never swapped during balancing (frozen in place), and pairs logic ignores them entirely.
 - **Maximize the number of complete groups.** Players who don't fit go to the bench.
 - **Backups are bench-first.** Players who opted into `backup` are the natural bench
   candidates: the grouper fills every slot from regular signups first and only pulls in a

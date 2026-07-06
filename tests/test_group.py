@@ -1,5 +1,11 @@
-from lib.models import Group, GROUP_SIZE
+from lib.models import Group, GROUP_SIZE, PHANTOM_RL_NAMES
 from tests.factories import make_player
+
+_PHANTOM_NAME = PHANTOM_RL_NAMES[0]
+
+
+def make_phantom(roles=('tank',)):
+    return make_player(username=_PHANTOM_NAME, roles=roles, is_raid_leader=True)
 
 
 def fill_group(group, roles):
@@ -99,7 +105,8 @@ class TestGroup:
         assert subject.required_raid_leaders == 1
 
     def test_it_requires_no_raid_leader_when_it_is_phantom(self):
-        subject = Group(needs_raid_leader=True)
+        subject = Group()
+        subject.add(make_phantom(), 'tank')
         assert subject.required_raid_leaders == 0
 
     def test_it_allows_a_swap_that_keeps_its_only_raid_leader(self):
@@ -119,10 +126,11 @@ class TestGroup:
         assert not subject.swap_keeps_raid_leader(mine, incoming)
 
     def test_it_allows_dropping_a_raid_leader_when_a_phantom_group_needs_none(self):
-        subject = Group(needs_raid_leader=True)
+        subject = Group()
+        subject.add(make_phantom(), 'tank')
         leader = make_player(username='rl', is_raid_leader=True)
-        subject.add(leader, 'tank')
-        mine = subject.assignments[0]
+        subject.add(leader, 'pure')
+        mine = subject.assignments[1]  # the real RL
         incoming = make_player(username='ordinary', is_raid_leader=False)
         assert subject.swap_keeps_raid_leader(mine, incoming)
 

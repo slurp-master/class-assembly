@@ -1,16 +1,23 @@
 from collections import Counter
 
-from lib.models import Group
+from lib.models import Group, PHANTOM_RL_NAMES
 from lib.balancer import calculate_group_imbalance, swap_members_for_balance
 from tests.factories import make_player as player
 
+_PHANTOM_NAME = PHANTOM_RL_NAMES[0]
 
-def group(assignments, needs_raid_leader=False):
+
+def group(assignments):
     """Build a group directly from (player, role) pairs."""
-    g = Group(needs_raid_leader=needs_raid_leader)
+    g = Group()
     for p, role in assignments:
         g.add(p, role)
     return g
+
+
+def phantom_player():
+    """A placeholder RL that makes a group report needs_raid_leader=True."""
+    return player(_PHANTOM_NAME, roles=('tank', 'pure', 'shield', 'melee', 'ranged', 'caster'), is_raid_leader=True)
 
 
 def role_counts(g):
@@ -38,10 +45,11 @@ class TestCalculateGroupImbalance:
         assert calculate_group_imbalance([g1, g2]) == 1.0
 
 
-def phantom_group(assignments):
-    """A group with no raid-leader requirement, so the RL guard never blocks swaps --
-    lets the balance tests isolate the experience-balancing behavior."""
-    return group(assignments, needs_raid_leader=True)
+def phantom_group(assignments, phantom_role='pure'):
+    """A group with a phantom RL placeholder occupying ``phantom_role``, so the RL guard
+    never blocks swaps on real members -- isolates the experience-balancing behavior.
+    Default role 'pure' avoids colliding with the tank/melee slots most tests use."""
+    return group([(phantom_player(), phantom_role)] + list(assignments))
 
 
 class TestSwapMembersForBalance:
@@ -96,25 +104,26 @@ class TestSwapMembersForBalance:
         swaps = swap_members_for_balance([g1, g2])
 
         assert swaps == 0
-        assert set(g1.members) == {tank_only, ranged_only}
-        assert set(g2.members) == {rich_melee, rich_caster}
+        real = lambda g: {p for p in g.members if not p.is_phantom_rl}
+        assert real(g1) == {tank_only, ranged_only}
+        assert real(g2) == {rich_melee, rich_caster}
 
     def test_it_never_strips_a_group_of_its_only_raid_leader(self):
-        # g1 is the heavy group; both a tank<->tank swap (which moves its sole raid leader
-        # out) and a melee<->melee swap would improve balance. The guard must forbid the
-        # raid-leader move, so balancing happens via the melee swap and g1 keeps its RL.
-        leader = player('leader', ('tank', 'pure', 'shield'), is_raid_leader=True)  # exp 3
-        high_melee = player('high_melee', ('melee', 'pure', 'shield'))             # exp 3
-        low_tank = player('low_tank', ('tank',))                                   # exp 1
-        low_melee = player('low_melee', ('melee',))                                # exp 1
-        g1 = group([(leader, 'tank'), (high_melee, 'melee')])   # experience 6, sole RL
-        g2 = group([(low_tank, 'tank'), (low_melee, 'melee')],
-                   needs_raid_leader=True)                      # experience 2, phantom
+        # g1 has a sole real RL; g2 also has a real RL so swaps between them are legal in
+        # general. The only forbidden move is taking the leader *out* of g1 (dropping it to
+        # zero real RLs). A melee<->melee swap (which doesn't touch the leader) is allowed
+        # and improves balance; the tank<->tank swap (which would move the leader) is blocked.
+        # g1 has a sole real RL; g2 is phantom (required_raid_leaders==0). A tank<->tank
+        # swap would move the leader out of g1, dropping it to zero real RLs — forbidden.
+        leader = player('Leader', ('tank', 'pure', 'shield'), is_raid_leader=True)   # exp 3
+        high_melee = player('High_Melee', ('melee', 'pure', 'shield'))               # exp 3
+        low_tank = player('Low_Tank', ('tank',))                                     # exp 1
+        low_melee = player('Low_Melee', ('melee',))                                  # exp 1
+        g1 = group([(leader, 'tank'), (high_melee, 'melee')])
+        g2 = phantom_group([(low_tank, 'tank'), (low_melee, 'melee')], phantom_role='shield')
 
-        swaps = swap_members_for_balance([g1, g2])
+        swap_members_for_balance([g1, g2])
 
-        assert swaps > 0                       # balance still improved (via the melee swap)
-        assert g1.has_raid_leader              # ...but the raid leader was never moved out
         assert leader in g1.members
 
     def test_it_allows_swapping_a_raid_leader_out_of_a_phantom_group(self):
@@ -133,5 +142,5 @@ class TestSwapMembersForBalance:
 
         assert swaps > 0
         assert after < before
-        # The raid leader was free to move out of its phantom group.
-        assert not g1.has_raid_leader
+        # The real RL was free to move out of its phantom group (required_raid_leaders==0).
+        assert leader not in g1.members

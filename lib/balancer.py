@@ -65,6 +65,10 @@ def swap_members_for_balance(
                     for b in group2.assignments:
                         if not a.can_swap_with(b):
                             continue
+                        if a.player.is_phantom_rl:
+                            continue
+                        if b.player.is_phantom_rl:
+                            continue
                         if not group1.swap_keeps_raid_leader(a, b.player):
                             continue
                         if not group2.swap_keeps_raid_leader(b, a.player):

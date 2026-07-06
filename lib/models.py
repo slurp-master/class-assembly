@@ -7,6 +7,9 @@ FIXED_ROLES = ['tank', 'tank', 'pure', 'shield']
 DPS_ROLES = ['melee', 'ranged', 'caster']
 DPS_SLOTS = 4
 
+# Placeholder names cycled across phantom-RL groups (drawn from the pool in order).
+PHANTOM_RL_NAMES = ['Raidingway', 'Teachingway', 'Wipingway']
+
 
 @dataclass(frozen=True)
 class Player:
@@ -15,6 +18,11 @@ class Player:
     available_roles: frozenset
     is_backup: bool
     is_raid_leader: bool = False
+
+    @property
+    def is_phantom_rl(self) -> bool:
+        """True if this player is a placeholder for a phantom raid leader slot."""
+        return self.global_name in PHANTOM_RL_NAMES
 
     @property
     def num_roles(self) -> int:
@@ -59,11 +67,13 @@ class Assignment:
 
 
 class Group:
-    def __init__(self, needs_raid_leader: bool = False):
+    def __init__(self):
         self.assignments: list[Assignment] = []
-        # Phantom groups are intentionally formed without a real raid leader, in the
-        # hope one is found before the raid starts (setups are made ~a day ahead).
-        self.needs_raid_leader = needs_raid_leader
+
+    @property
+    def needs_raid_leader(self) -> bool:
+        """True if this group has a placeholder RL — a real leader still needs to be found."""
+        return any(p.is_phantom_rl for p in self.members)
 
     @property
     def members(self) -> list[Player]:
@@ -149,6 +159,6 @@ class Group:
             p = a.player
             # Higher weight for higher-priority roles the player can fill.
             avail_score = sum(p.can(role) * (10 ** (len(priority) - i)) for i, role in enumerate(priority))
-            return (-avail_score, p.username)
+            return (not p.is_raid_leader, -avail_score, p.username)
 
         return sorted(self.assignments, key=key)
