@@ -6,6 +6,7 @@ GROUP_SIZE = 8
 FIXED_ROLES = ['tank', 'tank', 'pure', 'shield']
 DPS_ROLES = ['melee', 'ranged', 'caster']
 DPS_SLOTS = 4
+_STANDARD_SLOTS = FIXED_ROLES + DPS_ROLES + ['dps']
 
 # Placeholder names cycled across phantom-RL groups (drawn from the pool in order).
 PHANTOM_RL_NAMES = ['Raidingway', 'Teachingway', 'Wipingway']
@@ -148,6 +149,43 @@ class Group:
     def is_standard(self) -> bool:
         """True if all three DPS flavors are represented (>=1 each)."""
         return set(DPS_ROLES).issubset(self.dps_flavors())
+
+    def repair_composition(self) -> bool:
+        """Try to reassign roles so all three DPS flavors are covered.
+
+        Only roles change — the set of players stays the same. Returns True if the group
+        is standard after the call (either it already was, or the repair succeeded).
+
+        Uses backtracking over _STANDARD_SLOTS (2×tank, pure, shield, melee, ranged,
+        caster, any-DPS). The three named DPS slots come before the wildcard, so flavor
+        coverage is maximised before the free slot is resolved. A fixed-role player (e.g.
+        a shield/caster player greedily assigned to shield) can be reassigned to DPS if
+        another player can cover their fixed slot instead.
+        """
+        if self.is_standard():
+            return True
+
+        assignment: list[tuple['Player', str]] = []
+
+        def backtrack(slot_idx: int, remaining: list['Player']) -> bool:
+            if slot_idx == len(_STANDARD_SLOTS):
+                return True
+            slot = _STANDARD_SLOTS[slot_idx]
+            for i, player in enumerate(remaining):
+                can_fill = any(player.can(f) for f in DPS_ROLES) if slot == 'dps' else player.can(slot)
+                if not can_fill:
+                    continue
+                role = slot if slot != 'dps' else next(f for f in DPS_ROLES if player.can(f))
+                assignment.append((player, role))
+                if backtrack(slot_idx + 1, remaining[:i] + remaining[i + 1:]):
+                    return True
+                assignment.pop()
+            return False
+
+        if not backtrack(0, self.members):
+            return False
+        self.assignments = [Assignment(player=p, role=r) for p, r in assignment]
+        return True
 
     def ordered_members(self) -> list[Assignment]:
         """Assignments ordered for readable output: by which roles a player is available

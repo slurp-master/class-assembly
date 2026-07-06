@@ -99,6 +99,14 @@ def main(seed: int | None = None, phantom_rl: int = 0) -> None:
     swaps = swap_members_for_balance(groups, pairs=pairs)
     logger.info(f'Completed {swaps} swaps')
 
+    for i, group in enumerate(groups, 1):
+        group.repair_composition()
+        if not group.is_standard():
+            logger.warning(
+                f'Group {i} has non-standard DPS composition '
+                f'(flavors: {sorted(group.dps_flavors())}) -- raid is viable but harder'
+            )
+
     export_groups_to_csv(groups, backup, 'data/020_setup/setup.csv')
 
     log_group_balance(groups)

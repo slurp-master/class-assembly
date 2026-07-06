@@ -60,7 +60,6 @@ class GroupAssembly:
         self._backup: list[Player] = []
         self._pairs: dict[str, str] = pairs or {}
         self._violated_pairs: list[tuple[str, str]] = []
-        self._non_standard_groups = 0
         self._max_groups = self._calculate_max_groups()
 
     def _calculate_max_groups(self) -> int:
@@ -235,7 +234,10 @@ class GroupAssembly:
                 self._release(group)
                 return None
 
-        return group if group.is_full() else self._release(group)
+        if not group.is_full():
+            return self._release(group)
+        group.repair_composition()
+        return group
 
     def _release(self, group: Group) -> None:
         """Return a failed group's members to the available pool."""
@@ -263,12 +265,6 @@ class GroupAssembly:
                 continue
 
             self._groups.append(group)
-            if not group.is_standard():
-                self._non_standard_groups += 1
-                logger.warning(
-                    f'Group {len(self._groups)} has non-standard DPS composition '
-                    f'(flavors: {sorted(group.dps_flavors())}) -- raid is viable but harder'
-                )
             if group.needs_raid_leader:
                 logger.warning(f'Group {len(self._groups)} formed WITHOUT a raid leader (phantom)')
             logger.info(f'Group {len(self._groups)} formed with {len(group.members)} members')
@@ -278,7 +274,7 @@ class GroupAssembly:
         phantom = sum(1 for g in self._groups if g.needs_raid_leader)
         logger.info(
             f'Final: {len(self._groups)} complete groups '
-            f'({self._non_standard_groups} non-standard, {phantom} phantom-RL), '
+            f'({phantom} phantom-RL), '
             f'{len(self._backup)} backup'
         )
 

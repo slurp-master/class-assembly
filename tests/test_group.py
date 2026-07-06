@@ -161,3 +161,83 @@ class TestGroup:
         subject.add(omni, 'tank')
         ordered = [a.player for a in subject.ordered_members()]
         assert ordered == [omni, caster_only]
+
+
+class TestRepairComposition:
+    def _standard_group(self) -> Group:
+        """A fully standard group: 2 tank, 1 pure, 1 shield, melee+ranged+caster+melee."""
+        g = Group()
+        fill_group(g, STANDARD_ROLES)
+        return g
+
+    def test_it_returns_true_and_leaves_a_standard_group_unchanged(self):
+        g = self._standard_group()
+        members_before = list(g.members)
+        result = g.repair_composition()
+        assert result is True
+        assert g.members == members_before
+        assert g.is_standard()
+
+    def test_it_repairs_a_group_missing_caster_when_a_flex_player_can_cover_it(self):
+        # Greedy fill assigned the flex player to melee, leaving no caster.
+        # repair_composition should reassign them to caster.
+        g = Group()
+        g.add(make_player('t1', ('tank',)), 'tank')
+        g.add(make_player('t2', ('tank',)), 'tank')
+        g.add(make_player('h1', ('pure',)), 'pure')
+        g.add(make_player('h2', ('shield',)), 'shield')
+        g.add(make_player('m1', ('melee',)), 'melee')
+        g.add(make_player('m2', ('melee',)), 'melee')
+        g.add(make_player('r1', ('ranged',)), 'ranged')
+        g.add(make_player('flex', ('melee', 'caster')), 'melee')  # wrongly assigned
+        assert not g.is_standard()
+        result = g.repair_composition()
+        assert result is True
+        assert g.is_standard()
+        assert {a.role for a in g.assignments if a.player.username == 'flex'} == {'caster'}
+
+    def test_it_repairs_when_a_fixed_role_player_must_swap_to_free_up_dps_coverage(self):
+        # shield/caster player was greedily assigned to shield; no one else can caster.
+        # Repair must reassign them to caster and find another player for shield.
+        g = Group()
+        g.add(make_player('t1', ('tank',)), 'tank')
+        g.add(make_player('t2', ('tank',)), 'tank')
+        g.add(make_player('h1', ('pure',)), 'pure')
+        g.add(make_player('sc', ('shield', 'caster')), 'shield')  # wrongly in shield
+        g.add(make_player('ms', ('melee', 'shield')), 'melee')    # can cover shield
+        g.add(make_player('m1', ('melee',)), 'melee')
+        g.add(make_player('r1', ('ranged',)), 'ranged')
+        g.add(make_player('m2', ('melee',)), 'melee')
+        assert not g.is_standard()
+        result = g.repair_composition()
+        assert result is True
+        assert g.is_standard()
+
+    def test_it_returns_false_when_no_standard_assignment_is_possible(self):
+        # Four melee-only DPS — caster and ranged are genuinely unachievable.
+        g = Group()
+        g.add(make_player('t1', ('tank',)), 'tank')
+        g.add(make_player('t2', ('tank',)), 'tank')
+        g.add(make_player('h1', ('pure',)), 'pure')
+        g.add(make_player('h2', ('shield',)), 'shield')
+        g.add(make_player('m1', ('melee',)), 'melee')
+        g.add(make_player('m2', ('melee',)), 'melee')
+        g.add(make_player('m3', ('melee',)), 'melee')
+        g.add(make_player('m4', ('melee',)), 'melee')
+        result = g.repair_composition()
+        assert result is False
+        assert not g.is_standard()
+
+    def test_it_does_not_change_the_set_of_players_only_their_roles(self):
+        g = Group()
+        g.add(make_player('t1', ('tank',)), 'tank')
+        g.add(make_player('t2', ('tank',)), 'tank')
+        g.add(make_player('h1', ('pure',)), 'pure')
+        g.add(make_player('h2', ('shield',)), 'shield')
+        g.add(make_player('m1', ('melee',)), 'melee')
+        g.add(make_player('m2', ('melee',)), 'melee')
+        g.add(make_player('r1', ('ranged',)), 'ranged')
+        g.add(make_player('flex', ('melee', 'caster')), 'melee')
+        members_before = set(g.members)
+        g.repair_composition()
+        assert set(g.members) == members_before
